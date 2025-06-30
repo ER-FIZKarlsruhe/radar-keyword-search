@@ -11,9 +11,11 @@ WORKDIR /app
 COPY requirements.txt .
 
 # Install Python dependencies
-RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install --upgrade pip && \
-    pip install -r requirements.txt
+ARG PIP_CACHE_DIR=/root/.cache/pip
+ENV PIP_CACHE_DIR=${PIP_CACHE_DIR}
+RUN mkdir -p ${PIP_CACHE_DIR} \
+    && pip install --upgrade pip \
+    && pip install --cache-dir=${PIP_CACHE_DIR} -r requirements.txt
 
 COPY . .
 
