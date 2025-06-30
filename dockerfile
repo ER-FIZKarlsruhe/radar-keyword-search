@@ -12,7 +12,7 @@ COPY requirements.txt .
 # Install Python dependencies
 ARG PIP_CACHE_DIR=/root/.cache/pip
 ENV PIP_CACHE_DIR=${PIP_CACHE_DIR}
-RUN pip install --upgrade pip \
+RUN pip install --cache-dir=${PIP_CACHE_DIR} --upgrade pip \
     && pip install --cache-dir=${PIP_CACHE_DIR} -r requirements.txt
 
 COPY . .
