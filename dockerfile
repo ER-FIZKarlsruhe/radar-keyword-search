@@ -1,5 +1,4 @@
-
-
+# syntax=docker/dockerfile:1.4
 FROM python:3.11-slim
 
 # Install build tools
@@ -12,8 +11,9 @@ WORKDIR /app
 COPY requirements.txt .
 
 # Install Python dependencies
-RUN pip install --upgrade pip
-RUN pip install -r requirements.txt
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --upgrade pip && \
+    pip install -r requirements.txt
 
 COPY . .
 
