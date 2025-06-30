@@ -9,14 +9,16 @@ WORKDIR /app
 
 COPY requirements.txt .
 
-# Install Python dependencies
+# 1. Tell pip where its cache should live
 ENV PIP_CACHE_DIR=/export/bamboo/cache/pip
-ENV PIP_BUILD=/export/bamboo/cache/pip/build
+
+# 2. Force ALL temp/build files onto your NFS
 ENV TMPDIR=/export/bamboo/cache/pip/tmp
+ENV TEMP=$TMPDIR
+ENV TMP=$TMPDIR
 
 RUN pip install -vvv \
        --cache-dir=$PIP_CACHE_DIR \
-       --build=$PIP_BUILD         \
        --log $PIP_CACHE_DIR/pip.log \
        -r requirements.txt
 
