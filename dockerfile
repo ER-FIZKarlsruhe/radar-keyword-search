@@ -1,4 +1,5 @@
-FROM python:3.11-slim as builder
+# syntax = docker/dockerfile:1.2
+FROM python:3.11-slim
 
 # Install build tools
 RUN apt-get update && apt-get install -y \
@@ -9,16 +10,10 @@ WORKDIR /app
 
 COPY requirements.txt .
 
-RUN pip wheel --no-cache-dir --no-deps --wheel-dir /app/wheels -r requirements.txt
 
-# final stage
-FROM python:3.11-slim
+RUN --mount=type=cache,target=/export/bamboo/cache/pip \
+        pip install -vvv -r requirements.txt
 
-WORKDIR /app
-
-COPY --from=builder /app/wheels /wheels
-COPY --from=builder /app/requirements.txt .
-
-RUN pip install --no-cache /wheels/*
+COPY . .
 
 CMD ["uvicorn", "iri_api:app", "--host", "0.0.0.0", "--port", "8000"]
