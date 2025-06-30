@@ -1,4 +1,4 @@
-FROM python:3.11-slim
+FROM python:3.11-slim as builder
 
 # Install build tools
 RUN apt-get update && apt-get install -y \
@@ -9,19 +9,16 @@ WORKDIR /app
 
 COPY requirements.txt .
 
-# 1. Tell pip where its cache should live
-ENV PIP_CACHE_DIR=/export/bamboo/cache/pip
+RUN pip wheel --no-cache-dir --no-deps --wheel-dir /app/wheels -r requirements.txt
 
-# 2. Force ALL temp/build files onto your NFS
-ENV TMPDIR=/export/bamboo/cache/pip/tmp
-ENV TEMP=$TMPDIR
-ENV TMP=$TMPDIR
+# final stage
+FROM python:3.12.2-slim
 
-RUN pip install -vvv \
-       --cache-dir=$PIP_CACHE_DIR \
-       --log $PIP_CACHE_DIR/pip.log \
-       -r requirements.txt
+WORKDIR /app
 
-COPY . .
+COPY --from=builder /app/wheels /wheels
+COPY --from=builder /app/requirements.txt .
+
+RUN pip install --no-cache /wheels/*
 
 CMD ["uvicorn", "iri_api:app", "--host", "0.0.0.0", "--port", "8000"]
