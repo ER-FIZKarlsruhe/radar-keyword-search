@@ -10,10 +10,15 @@ WORKDIR /app
 COPY requirements.txt .
 
 # Install Python dependencies
-ARG PIP_CACHE_DIR=/root/.cache/pip
-ENV PIP_CACHE_DIR=${PIP_CACHE_DIR}
-RUN --mount=type=cache,target=${PIP_CACHE_DIR} pip install --cache-dir=${PIP_CACHE_DIR} --upgrade pip \
-    && pip install -vvv --cache-dir=${PIP_CACHE_DIR} -r requirements.txt
+ENV PIP_CACHE_DIR=/export/bamboo/cache/pip
+ENV PIP_BUILD=/export/bamboo/cache/pip/build
+ENV TMPDIR=/export/bamboo/cache/pip/tmp
+
+RUN pip install -vvv \
+       --cache-dir=$PIP_CACHE_DIR \
+       --build=$PIP_BUILD         \
+       --log $PIP_CACHE_DIR/pip.log \
+       -r requirements.txt
 
 COPY . .
 
