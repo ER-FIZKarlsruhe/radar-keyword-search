@@ -1,4 +1,3 @@
-# syntax = docker/dockerfile:1.2
 FROM python:3.11-slim
 
 # Install build tools
@@ -11,8 +10,8 @@ WORKDIR /app
 COPY requirements.txt .
 
 
-RUN --mount=type=cache,target=/export/bamboo/cache/pip \
-        pip install -vvv -r requirements.txt
+RUN pip install --upgrade pip && \
+    pip install -r requirements.txt
 
 COPY . .
 
