@@ -54,8 +54,14 @@ def check_iri_exists(iri):
         return False
 
 # TIB IRI lookup
-def search_tib_best_match(keyword, threshold):
+def search_tib_best_match(keyword, ontology, threshold):
     url = f"https://api.terminology.tib.eu/api/search?q={keyword}"
+
+    if ontology:
+            url += f"&ontology={ontology}"
+
+    print(f"TIB request url: {url}")
+
     try:
         response = requests.get(url, timeout=10)
         response.raise_for_status()
@@ -86,7 +92,8 @@ def search_tib_best_match(keyword, threshold):
                         "iri": iri,
                         "label": doc.get("label"),
                         "best_term": term,
-                        "distance": dist
+                        "distance": dist,
+                        "ontology_name": doc.get("ontology_name")
                     }
 
     if best_match and best_match["distance"] <= threshold:
@@ -96,6 +103,7 @@ def search_tib_best_match(keyword, threshold):
 # Request model
 class DocumentRequest(BaseModel):
     document: str
+    ontology: Optional[str] = None
 
 # API endpoint
 @app.post("/extract-iris")
@@ -105,12 +113,19 @@ def extract_iris(req: DocumentRequest) -> Dict[str, Optional[Dict]]:
             req.document,
             keyphrase_ngram_range=(1, 1),
             stop_words='english',
-            top_n=5
+            top_n=10
         )
 
         best_matches = {}
+        ontology = getattr(req, 'ontology', None)
+        print(f"Received request: {req}")
+
+        print(f"Document: {req.document}")
+        print(f"Ontology: {getattr(req, 'ontology', None)}")
+
+
         for kw, _ in keywords:
-            match = search_tib_best_match(kw, HAMMING_THRESHOLD)
+            match = search_tib_best_match(kw, ontology, HAMMING_THRESHOLD)
             best_matches[kw] = match
 
         return best_matches

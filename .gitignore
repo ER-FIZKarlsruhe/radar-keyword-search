@@ -1,1 +1,5 @@
-/.project
+.project
+.cache/
+__pycache__/
+nohup.out
+radar-keywords-env/
