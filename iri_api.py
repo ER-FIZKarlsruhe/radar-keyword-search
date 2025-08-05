@@ -4,15 +4,22 @@ from typing import Dict, Optional
 import uvicorn
 import asyncio
 import httpx
+import os
 
 from transformers import AutoTokenizer, AutoModel
 from keybert import KeyBERT
+from keybert.llm import OpenAI as OpenAIWrapper
+from keybert import KeyLLM
+from urllib.parse import quote
+import openai
 import torch
 import numpy as np
 
 app = FastAPI()
 
-# Load PubMedBERT
+# -------------------------------
+# PubMedBERT Setup
+# -------------------------------
 model_name = "microsoft/BiomedNLP-PubMedBERT-base-uncased-abstract-fulltext"
 tokenizer = AutoTokenizer.from_pretrained(model_name)
 model = AutoModel.from_pretrained(model_name)
@@ -32,6 +39,20 @@ class PubMedBERTEmbedding:
 
 kw_model = KeyBERT(model=PubMedBERTEmbedding())
 
+# -------------------------------
+# ChatGPT (OpenAI KeyBERT) Setup
+# -------------------------------
+OPENAI_API_KEY = os.getenv("CHAT_GPT_API_KEY")
+if not OPENAI_API_KEY:
+    raise RuntimeError("CHAT_GPT environment variable is not set.")
+
+openai_client = openai.OpenAI(api_key=OPENAI_API_KEY)
+openai_llm = OpenAIWrapper(openai_client)
+openai_kw_model = KeyLLM(openai_llm)
+
+# -------------------------------
+# Supporting Functions
+# -------------------------------
 HAMMING_THRESHOLD = 5
 
 def hamming_distance(s1, s2):
@@ -48,7 +69,8 @@ async def check_iri_exists(iri, client: httpx.AsyncClient) -> bool:
         return False
 
 async def search_tib_best_match(keyword: str, ontology: Optional[str], threshold: int, client: httpx.AsyncClient) -> Optional[Dict]:
-    url = f"https://api.terminology.tib.eu/api/search?q={keyword}"
+    encoded_kw = quote(keyword)
+    url = f"https://api.terminology.tib.eu/api/search?q={encoded_kw}"
     if ontology:
         url += f"&ontology={ontology}"
 
@@ -92,10 +114,16 @@ async def search_tib_best_match(keyword: str, ontology: Optional[str], threshold
         return best_match
     return None
 
+# -------------------------------
+# Request Schema
+# -------------------------------
 class DocumentRequest(BaseModel):
     document: str
     ontology: Optional[str] = None
 
+# -------------------------------
+# Endpoint: PubMedBERT
+# -------------------------------
 @app.post("/extract-iris")
 async def extract_iris(req: DocumentRequest) -> Dict[str, Optional[Dict]]:
     try:
@@ -117,10 +145,52 @@ async def extract_iris(req: DocumentRequest) -> Dict[str, Optional[Dict]]:
             results = await asyncio.gather(*tasks)
 
         best_matches = {kw: result for (kw, _), result in zip(keywords, results)}
-
         return best_matches
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# To run: uvicorn yourfile:app --reload
+# -------------------------------
+# Endpoint: ChatGPT (OpenAI)
+# -------------------------------
+@app.post("/extract-iris-openai")
+async def extract_iris_openai(req: DocumentRequest) -> Dict[str, Optional[Dict]]:
+    try:
+        print("Received document:", req.document)
+
+        try:
+            keywords = openai_kw_model.extract_keywords(
+                req.document
+            )
+            # Ensure it's a flat list of strings
+            if isinstance(keywords[0], list):
+                keywords = keywords[0]
+
+            clean_keywords = [kw.strip() for kw in keywords if kw and kw.strip()]
+
+        except Exception as llm_error:
+            print("Keyword extraction failed:", llm_error)
+            raise HTTPException(status_code=500, detail=f"Keyword extraction error: {str(llm_error)}")
+
+        print("Extracted keywords:", keywords)
+
+        ontology = req.ontology
+        async with httpx.AsyncClient() as client:
+            tasks = [
+                search_tib_best_match(kw, ontology, HAMMING_THRESHOLD, client)
+                for kw in clean_keywords
+            ]
+            results = await asyncio.gather(*tasks)
+
+        best_matches = {kw: result for (kw), result in zip(keywords, results)}
+        return best_matches
+
+    except Exception as e:
+        print("Unhandled error:", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# -------------------------------
+# Run the server
+# -------------------------------
+# Run with: uvicorn iri_api:app --reload
