@@ -68,11 +68,15 @@ async def check_iri_exists(iri, client: httpx.AsyncClient) -> bool:
     except httpx.RequestError:
         return False
 
-async def search_tib_best_match(keyword: str, ontology: Optional[str], threshold: int, client: httpx.AsyncClient) -> Optional[Dict]:
+async def search_tib_best_match(keyword: str, ontology: Optional[str],  ontology_collection: Optional[str], threshold: int, client: httpx.AsyncClient) -> Optional[Dict]:
     encoded_kw = quote(keyword)
     url = f"https://api.terminology.tib.eu/api/search?q={encoded_kw}"
     if ontology:
         url += f"&ontology={ontology}"
+
+    if ontology_collection:
+        url += f"&schema=collection&classification={ontology_collection}"
+
 
     print(f"TIB request url: {url}")
 
@@ -120,6 +124,7 @@ async def search_tib_best_match(keyword: str, ontology: Optional[str], threshold
 class DocumentRequest(BaseModel):
     document: str
     ontology: Optional[str] = None
+    ontology_collection: Optional[str] = None
 
 # -------------------------------
 # Endpoint: PubMedBERT
@@ -135,11 +140,12 @@ async def extract_iris(req: DocumentRequest) -> Dict[str, Optional[Dict]]:
         )
 
         ontology = req.ontology
+        ontology_collection = req.ontology_collection
         print(f"Received request: {req}")
 
         async with httpx.AsyncClient() as client:
             tasks = [
-                search_tib_best_match(kw, ontology, HAMMING_THRESHOLD, client)
+                search_tib_best_match(kw, ontology, ontology_collection, HAMMING_THRESHOLD, client)
                 for kw, _ in keywords
             ]
             results = await asyncio.gather(*tasks)
