@@ -10,6 +10,8 @@ This service provides keyword extraction from documents using either a custom Pu
 ### 1. Install Requirements
 
 ```bash
+python -m radar-keywords-env  && source radar-keywords-env/bin/activate
+
 pip install -r requirements.txt
 ```
 
@@ -120,3 +122,37 @@ curl --noproxy '*' -X POST http://localhost:8001/extract-iris \
 
 ---
 
+
+## Linux Service
+### Create a systemd Service File
+
+sudo nano /etc/systemd/system/radar-keywords.service
+
+Paste this content (adjust paths to your setup):
+```
+[Unit]
+Description=Radar Keywords API Service
+After=network.target
+
+[Service]
+User=admin
+Group=admin
+WorkingDirectory=/data/radar-keyword-search
+Environment="CHAT_GPT_API_KEY=your_value_here"
+Environment="PATH=/data/radar-keyword-search/radar-keywords-env/bin"
+
+ExecStart=/data/radar-keyword-search/radar-keywords-env/bin/python -m uvicorn iri_api:app --host 0.0.0.0 --port 8001
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+
+```
+
+### Reload and Enable the Service
+
+* sudo systemctl daemon-reload
+
+* sudo systemctl enable radar-keywords
+
+* sudo systemctl start radar-keywords

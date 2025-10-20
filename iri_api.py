@@ -194,6 +194,12 @@ async def extract_iris_openai(req: DocumentRequest) -> Dict[str, Optional[Dict]]
     except Exception as e:
         print("Unhandled error:", e)
         raise HTTPException(status_code=500, detail=str(e))
+        
+
+@app.get("/")
+async def health_check():
+    """Health check endpoint."""
+    return {"status": "ok", "service": "radar keyword service", "message": "Service is online"}
 
 
 # -------------------------------
