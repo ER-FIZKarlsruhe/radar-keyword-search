@@ -180,19 +180,25 @@ pytest -q --cov=iri_api --cov-report=term-missing
 This covers `hamming_distance`, `check_iri_exists`, `search_tib_best_match`, and `/extract-iris`
 under both backends (success, error, and edge cases like blank keywords from the LLM).
 
-### Ollama Integration Test
+### Integration Tests
 
-`integration_tests/` additionally has a real end-to-end test of the Ollama backend: it starts an
-actual Ollama server in a Docker container ([testcontainers](https://testcontainers.com)), pulls a
-small model (`qwen2.5:0.5b`) into it, and sends a real request through the FastAPI app. Unlike the
-suite above, this uses the **real** `keybert`/`openai`/`torch` packages (not stand-ins) and needs
-**Docker** running locally. It's deliberately kept separate from — and out of the default `pytest`
-run for — the fast suite above.
+`integration_tests/` additionally has real end-to-end tests that talk to actual external services
+instead of mocking them. Like the fast suite, they're run with `pytest`, but they're deliberately
+kept separate from — and out of the default `pytest` run for (see `testpaths` in `pytest.ini`) —
+the suite above.
 
 ```bash
 pip install -r integration_tests/requirements.txt
 pytest integration_tests
 ```
+
+#### Ollama Backend Test
+
+`test_ollama_backend.py` starts an actual Ollama server in a Docker container
+([testcontainers](https://testcontainers.com)), pulls a small model (`qwen2.5:0.5b`) into it, and
+sends a real request through the FastAPI app. Unlike the fast suite, this uses the **real**
+`keybert`/`openai`/`torch` packages (not stand-ins) and needs **Docker** running locally. The TIB
+Terminology API call is faked, so this test is only about the Ollama wiring.
 
 The pulled model is cached under `~/.cache/radar-keyword-search-ollama-test` on the host (mapped
 into the container), so repeat runs reuse it instead of re-downloading every time. Override the
@@ -200,6 +206,16 @@ location with the `OLLAMA_TEST_CACHE_DIR` environment variable if needed.
 
 > The container always runs on CPU, even on a machine with an NVIDIA GPU — this test only needs to
 > prove the Ollama *wiring* works, not benchmark inference speed.
+
+#### TIB Terminology Service Test
+
+`test_tib_service.py` sends a real request through the FastAPI app against the actual
+`https://api.terminology.tib.eu` API (no mocking), and does a real `HEAD` request against the IRI
+it resolves — proving the TIB lookup pipeline (`search_tib_best_match` / `check_iri_exists`) works
+end-to-end. It needs outbound network access to `api.terminology.tib.eu` and to whatever ontology
+registry hosts the resolved IRIs (e.g. `purl.obolibrary.org` for ChEBI). Keyword extraction is
+faked with a fixed keyword list (and the ML packages are stubbed, like in the fast suite), so this
+test is only about the TIB integration, not any extraction backend.
 
 ---
 
