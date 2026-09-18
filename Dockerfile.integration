@@ -1,0 +1,17 @@
+FROM python:3.11-slim
+
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+ARG NO_PROXY
+ENV HTTP_PROXY=${HTTP_PROXY} \
+    HTTPS_PROXY=${HTTPS_PROXY} \
+    NO_PROXY=${NO_PROXY}
+
+WORKDIR /app
+
+COPY integration_tests/requirements.txt integration_tests/requirements.txt
+RUN pip install --no-cache-dir -r integration_tests/requirements.txt
+
+COPY . .
+
+CMD ["pytest", "-q", "integration_tests"]
