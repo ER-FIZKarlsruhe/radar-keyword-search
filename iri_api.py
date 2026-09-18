@@ -68,11 +68,16 @@ elif EXTRACTION_BACKEND == "ollama":
     base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
     llm_model = os.getenv("OLLAMA_MODEL", "llama3")
     # Ollama doesn't check the API key, but the OpenAI client requires one.
-    # trust_env=False: Ollama is typically local/internal, and by default the
-    # openai client's httpx transport honours HTTP_PROXY/HTTPS_PROXY/NO_PROXY
-    # from the environment - on a machine behind a corporate proxy, that can
-    # route these requests through the proxy and break them.
-    llm_client = openai.OpenAI(api_key="ollama", base_url=base_url, http_client=httpx.Client(trust_env=False))
+    # Ollama is typically local/internal, and by default the openai client's
+    # httpx transport honours HTTP_PROXY/HTTPS_PROXY/NO_PROXY from the
+    # environment - on a machine behind a corporate proxy, that can route
+    # these requests through the proxy and break them. So by default we
+    # bypass any such proxy entirely; set OLLAMA_HTTP_PROXY to route through
+    # a specific proxy instead (e.g. if Ollama itself is only reachable
+    # through one).
+    ollama_proxy = os.getenv("OLLAMA_HTTP_PROXY")
+    ollama_http_client = httpx.Client(proxy=ollama_proxy) if ollama_proxy else httpx.Client(trust_env=False)
+    llm_client = openai.OpenAI(api_key="ollama", base_url=base_url, http_client=ollama_http_client)
 
     llm_wrapper = OpenAIWrapper(llm_client, model=llm_model, chat=True)
     llm_kw_model = KeyLLM(llm_wrapper)

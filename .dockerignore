@@ -1,0 +1,9 @@
+.git/
+.idea/
+.pytest_cache/
+__pycache__/
+radar-keywords-env/
+radar-keywords-test-env/
+.coverage
+htmlcov/
+nohup.out

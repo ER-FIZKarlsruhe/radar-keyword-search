@@ -92,6 +92,9 @@ curl --noproxy '*' -X POST http://localhost:8001/extract-iris \
   * `EXTRACTION_BACKEND`: `pubmedbert` (default) or `ollama`
   * `OLLAMA_BASE_URL`: Optional, defaults to `http://localhost:11434/v1`
   * `OLLAMA_MODEL`: Optional, defaults to `llama3`
+  * `OLLAMA_HTTP_PROXY`: Optional. By default, calls to Ollama bypass any system-configured
+    proxy entirely (Ollama is typically local/internal, and a corporate proxy can otherwise
+    intercept and break those calls). Set this if Ollama itself is only reachable through a proxy.
 
 ---
 
@@ -141,6 +144,17 @@ pip install -r requirements-test.txt
 
 pytest -q --cov=iri_api --cov-report=term-missing
 ```
+
+This exact flow is also checked in as `runTests.sh` (used by our Bamboo CI plan), which additionally
+honors `HTTP_PROXY`/`HTTPS_PROXY` when installing dependencies — needed on CI agents that have no
+direct internet access and can only reach PyPI through a corporate proxy:
+
+```bash
+HTTP_PROXY=http://proxy.example.com:8080 ./runTests.sh
+```
+
+Leave `HTTP_PROXY`/`HTTPS_PROXY` unset for a normal, direct install (e.g. on a developer machine
+with unrestricted internet access).
 
 **Windows (PowerShell):**
 ```powershell

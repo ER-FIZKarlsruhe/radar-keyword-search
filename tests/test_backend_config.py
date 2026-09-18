@@ -37,3 +37,32 @@ def test_ollama_base_url_and_model_are_overridable(load_backend):
     assert client_kwargs["base_url"] == "http://gpu-box:11434/v1"
     _, wrapper_kwargs = mod.OpenAIWrapper.call_args
     assert wrapper_kwargs["model"] == "mistral"
+
+
+def test_ollama_backend_bypasses_the_system_proxy_by_default(load_backend, monkeypatch):
+    monkeypatch.delenv("OLLAMA_HTTP_PROXY", raising=False)
+    captured_kwargs = {}
+
+    class FakeHttpxClient:
+        def __init__(self, **kwargs):
+            captured_kwargs.update(kwargs)
+
+    monkeypatch.setattr("httpx.Client", FakeHttpxClient)
+
+    load_backend("ollama")
+
+    assert captured_kwargs == {"trust_env": False}
+
+
+def test_ollama_backend_uses_an_explicit_proxy_when_configured(load_backend, monkeypatch):
+    captured_kwargs = {}
+
+    class FakeHttpxClient:
+        def __init__(self, **kwargs):
+            captured_kwargs.update(kwargs)
+
+    monkeypatch.setattr("httpx.Client", FakeHttpxClient)
+
+    load_backend("ollama", OLLAMA_HTTP_PROXY="http://proxy.example.com:8080")
+
+    assert captured_kwargs == {"proxy": "http://proxy.example.com:8080"}
