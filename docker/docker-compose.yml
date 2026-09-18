@@ -1,0 +1,32 @@
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    networks:
+      - radar-net
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama:/root/.ollama
+
+  radar-keyword-search:
+    image: docker.dev.fiz-karlsruhe.de/radar-keyword-search:0.1
+    container_name: radar-keyword-search
+    networks:
+      - radar-net
+    ports:
+      - "8000:8000"
+    environment:
+      EXTRACTION_BACKEND: ollama
+      OLLAMA_BASE_URL: http://ollama:11434/v1
+      OLLAMA_MODEL: llama3
+    depends_on:
+      - ollama
+
+networks:
+  radar-net:
+    name: radar-net
+
+volumes:
+  ollama:
+    name: ollama

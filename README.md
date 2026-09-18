@@ -1,16 +1,142 @@
 
 rd-search with TIB Terminology Service Support
 
-This service provides keyword extraction from documents using one of two interchangeable backends — a custom PubMedBERT model (CPU only) or a local Ollama model (GPU-accelerated) — followed by entity linking to the [TIB Terminology Service](https://api.terminology.tib.eu).
+This service provides keyword extraction from documents using one of two interchangeable backends — a custom PubMedBERT model (CPU only) or a local Ollama model — followed by entity linking to the [TIB Terminology Service](https://api.terminology.tib.eu).
+
+> **How to run this service:** in **production, always use the Docker image** (`docker/dockerfile`) — see [Running in Production](#-running-in-production-docker) below. The `python`/`pip` commands further down are for **local development only** (running tests, debugging, iterating on `iri_api.py`).
 
 ---
 
-## 🚀 Setup
+## 🚀 Running in Production (Docker)
+
+### 1. Start the Container
+
+```bash
+docker run -d --name radar-keyword-search \
+  -p 8000:8000 \
+  docker.dev.fiz-karlsruhe.de/radar-keyword-search:0.1
+```
+
+This starts with the default backend (`pubmedbert`, CPU only, no external services needed). The
+first request after startup will be slow while the PubMedBERT model downloads/loads — check
+`docker logs radar-keyword-search` and wait for `Uvicorn running on http://0.0.0.0:8000` before
+sending requests.
+
+### 2. Test It
+
+Health check:
+
+```bash
+curl -v --noproxy '*' http://localhost:8000/
+```
+
+Extract keywords/IRIs from a document:
+
+```bash
+curl -v --noproxy '*' -X POST http://localhost:8000/extract-iris \
+  -H 'Content-Type: application/json' \
+  -d '{"document": "The mitochondria is the powerhouse of the cell and regulates apoptosis."}'
+```
+
+Same, but restricted to a specific ontology (`ncit`):
+
+```bash
+curl -v --noproxy '*' -X POST http://localhost:8000/extract-iris \
+  -H 'Content-Type: application/json' \
+  -d '{"document": "The mitochondria is the powerhouse of the cell and regulates apoptosis.", "ontology": "ncit"}'
+```
+
+> `--noproxy '*'` avoids routing the request to `localhost` through a corporate proxy set via
+> `HTTP_PROXY`/`HTTPS_PROXY` on your machine — omit it if you don't have one configured.
+
+### 3. Switching Backend / Ollama Model in Production
+
+The backend is picked at container start via the `EXTRACTION_BACKEND` environment variable — pass
+it (and any backend-specific variables) with `-e` on `docker run`.
+
+First, start an Ollama server and pull a model into it. `llama3` is the default — it follows the
+comma-separated keyword-list format KeyBERT's `KeyLLM` prompts for reliably; much smaller models
+(e.g. `qwen2.5:0.5b`) tend to ignore that formatting instruction and return everything as a single
+garbled keyword instead of a clean list. Put Ollama on its own Docker network so the
+`radar-keyword-search` container can reach it by name:
+
+```bash
+docker network create radar-net
+
+docker run -d --name ollama \
+  --network radar-net \
+  -p 11434:11434 \
+  -v ollama:/root/.ollama \
+  ollama/ollama:latest
+
+docker exec ollama ollama pull llama3
+```
+
+`llama3` is a ~4.7GB download, so the pull takes a few minutes. `-p 11434:11434` is only needed if
+you also want to reach Ollama directly from the Docker host (e.g. `curl localhost:11434`); the
+`radar-keyword-search` container reaches it via the shared network regardless. `-v ollama:/root/.ollama`
+persists pulled models across container restarts.
+
+Then start the service pointed at it:
+
+```bash
+docker run -d --name radar-keyword-search \
+  --network radar-net \
+  -p 8000:8000 \
+  -e EXTRACTION_BACKEND=ollama \
+  -e OLLAMA_BASE_URL=http://ollama:11434/v1 \
+  -e OLLAMA_MODEL=llama3 \
+  docker.dev.fiz-karlsruhe.de/radar-keyword-search:0.1
+```
+
+* `EXTRACTION_BACKEND`: `pubmedbert` (default) or `ollama`
+* `OLLAMA_BASE_URL`: where the Ollama server's OpenAI-compatible API is reachable **from inside the
+  container** — `localhost` here means the container itself, not the Docker host, so this must be
+  an address the container can actually resolve/reach:
+  * Ollama running in another container on the same Docker network: use that container's name,
+    e.g. `http://ollama:11434/v1`, and start both containers with `--network <shared-network>`.
+  * Ollama running directly on the Docker host: use `http://host.docker.internal:11434/v1`
+    (Docker Desktop) or the host's LAN/bridge IP on Linux (add `--add-host=host.docker.internal:host-gateway`
+    to `docker run` to get the same hostname to work there too).
+* `OLLAMA_MODEL`: any chat-capable model already pulled into that Ollama server, e.g. `llama3`
+  (default), `mistral`. Smaller models like `qwen2.5:0.5b` are useful for a quick wiring smoke
+  test, but not recommended for real keyword-extraction quality — see the note above.
+* `OLLAMA_HTTP_PROXY`: optional — only needed if the Ollama server is itself behind a proxy (by
+  default, calls to Ollama bypass any proxy set via `HTTP_PROXY`/`HTTPS_PROXY`, since Ollama is
+  typically local/internal and a corporate proxy would otherwise intercept and break those calls).
+
+The active backend is reported by the `/` health check endpoint.
+
+### 4. Building the Image Yourself
+
+The image is built from `docker/dockerfile` (multi-stage: CPU-only PyTorch wheels, no CUDA stack,
+no compiler toolchain in the final image):
+
+```bash
+docker build -f docker/dockerfile -t radar-keyword-search:local .
+```
+
+On a build agent behind a corporate proxy (e.g. Bamboo), pass it through as build args:
+
+```bash
+docker build -f docker/dockerfile \
+  --build-arg HTTP_PROXY="$HTTP_PROXY" \
+  --build-arg HTTPS_PROXY="$HTTPS_PROXY" \
+  --build-arg NO_PROXY="$NO_PROXY" \
+  -t radar-keyword-search:local .
+```
+
+---
+
+## 🧑‍💻 Local Development Setup (Python / pip)
+
+> This is for developing/debugging the service locally — production deployments use the Docker
+> image above, not these commands.
 
 ### 1. Install Requirements
 
 ```bash
-python -m radar-keywords-env  && source radar-keywords-env/bin/activate
+python -m venv radar-keywords-env && source radar-keywords-env/bin/activate
 
 pip install -r requirements.txt
 ```
@@ -24,7 +150,7 @@ server, and selecting `ollama` never downloads the PubMedBERT model.
 | `EXTRACTION_BACKEND` | Description | Extra env vars |
 |---|---|---|
 | `pubmedbert` (default) | Local PubMedBERT model, runs on CPU, no external services | — |
-| `ollama` | A local/self-hosted [Ollama](https://ollama.com) model via its OpenAI-compatible API — use this on a machine with a dedicated GPU | `OLLAMA_BASE_URL` (optional, default `http://localhost:11434/v1`), `OLLAMA_MODEL` (optional, default `llama3`) |
+| `ollama` | A local/self-hosted [Ollama](https://ollama.com) model via its OpenAI-compatible API | `OLLAMA_BASE_URL` (optional, default `http://localhost:11434/v1`), `OLLAMA_MODEL` (optional, default `llama3`) |
 
 ```bash
 # Example: run against a local Ollama server with a specific model
@@ -34,16 +160,7 @@ export OLLAMA_MODEL=mistral
 
 > The active backend is reported by the `/` health check endpoint.
 
----
-
-## 🧠 Models Used
-
-* **`pubmedbert`**: PubMedBERT (`microsoft/BiomedNLP-PubMedBERT-base-uncased-abstract-fulltext`), CPU only
-* **`ollama`**: Any chat-capable model served by a local Ollama instance, via KeyBERT's `KeyLLM` interface
-
----
-
-## ▶️ Run the Server
+### 3. Run the Server
 
 Use `uvicorn` to launch the FastAPI app on port `8001` (or any other port of your choice):
 
@@ -51,9 +168,7 @@ Use `uvicorn` to launch the FastAPI app on port `8001` (or any other port of you
 uvicorn iri_api:app --reload --port 8001
 ```
 
----
-
-## 🧪 Usage Example
+### 4. Usage Example
 
 There is a single endpoint regardless of backend — whichever one is active via `EXTRACTION_BACKEND`
 is used automatically:
@@ -66,6 +181,13 @@ curl --noproxy '*' -X POST http://localhost:8001/extract-iris \
         "ontology": "et"
       }'
 ```
+
+---
+
+## 🧠 Models Used
+
+* **`pubmedbert`**: PubMedBERT (`microsoft/BiomedNLP-PubMedBERT-base-uncased-abstract-fulltext`), CPU only
+* **`ollama`**: Any chat-capable model served by a local Ollama instance, via KeyBERT's `KeyLLM` interface
 
 ---
 
@@ -219,7 +341,13 @@ test is only about the TIB integration, not any extraction backend.
 
 ---
 
-## Linux Service
+## Alternative: Running as a systemd Service (non-Docker deployment)
+
+> The Docker image is the recommended way to run this service in production (see
+> [Running in Production](#-running-in-production-docker)). Use this instead only on a host where
+> Docker isn't available and the service must run directly via the Python venv from
+> [Local Development Setup](#-local-development-setup-python--pip).
+
 ### Create a systemd Service File
 
 sudo nano /etc/systemd/system/radar-keywords.service
