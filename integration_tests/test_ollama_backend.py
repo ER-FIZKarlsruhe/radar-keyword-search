@@ -66,10 +66,14 @@ def ollama_backend():
         # missing once the test actually tries to use it. Run the pull
         # ourselves and fail fast with the real error instead.
         pull_result = ollama.exec(f"ollama pull {MODEL_NAME}")
-        assert pull_result.exit_code == 0, (
-            f"'ollama pull {MODEL_NAME}' failed with exit code {pull_result.exit_code}:\n"
-            f"{pull_result.output.decode(errors='replace')}"
-        )
+        if pull_result.exit_code != 0:
+            stdout, stderr = ollama.get_logs()
+            raise AssertionError(
+                f"'ollama pull {MODEL_NAME}' failed with exit code {pull_result.exit_code}:\n"
+                f"{pull_result.output.decode(errors='replace')}\n"
+                f"--- ollama server stdout ---\n{stdout.decode(errors='replace')}\n"
+                f"--- ollama server stderr ---\n{stderr.decode(errors='replace')}"
+            )
 
         os.environ["EXTRACTION_BACKEND"] = "ollama"
         os.environ["OLLAMA_BASE_URL"] = f"{ollama.get_endpoint()}/v1"
