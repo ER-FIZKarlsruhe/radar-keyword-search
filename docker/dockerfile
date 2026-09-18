@@ -1,18 +1,36 @@
-    FROM python:3.11-slim
+# ---- Build stage: install deps into a venv, discarded afterwards ----
+# (every dependency ships a prebuilt wheel for this image, so no compiler
+# toolchain is needed here; add build-essential if a future dependency
+# needs one)
+FROM python:3.11-slim AS builder
 
-# Install build tools
-RUN apt-get update && apt-get install -y \
-    git build-essential wget curl && \
-    rm -rf /var/lib/apt/lists/*
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+ARG NO_PROXY
+ENV HTTP_PROXY=${HTTP_PROXY} \
+    HTTPS_PROXY=${HTTPS_PROXY} \
+    NO_PROXY=${NO_PROXY}
+
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:${PATH}"
+
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
+
+# ---- Runtime stage: just the venv + app code, no compilers, no proxy env ----
+FROM python:3.11-slim
 
 WORKDIR /app
 
-COPY requirements.txt .
+COPY --from=builder /opt/venv /opt/venv
+ENV PATH="/opt/venv/bin:${PATH}"
 
+COPY iri_api.py .
 
-RUN pip install --upgrade pip && \
-    pip install -r requirements.txt
+RUN useradd --system --create-home appuser
+USER appuser
 
-COPY . .
-
+EXPOSE 8000
 CMD ["uvicorn", "iri_api:app", "--host", "0.0.0.0", "--port", "8000"]
