@@ -123,6 +123,43 @@ curl --noproxy '*' -X POST http://localhost:8001/extract-iris \
 ---
 
 
+## 🧪 Running the Tests
+
+The test suite does **not** need the GPU/ML stack (torch, transformers, keybert, openai)
+installed, a GPU, network access, or a real `CHAT_GPT_API_KEY` — `tests/conftest.py`
+replaces those heavy dependencies with lightweight stand-ins before `iri_api` is imported,
+and configures each one per test. Only the small web-framework packages are needed to run it:
+
+**Linux / macOS:**
+```bash
+python -m venv radar-keywords-test-env && source radar-keywords-test-env/bin/activate
+
+pip install -r requirements-test.txt
+
+pytest -q --cov=iri_api --cov-report=term-missing
+```
+
+**Windows (PowerShell):**
+```powershell
+python -m venv radar-keywords-test-env
+
+.\radar-keywords-test-env\Scripts\Activate.ps1
+
+pip install -r requirements-test.txt
+
+pytest -q --cov=iri_api --cov-report=term-missing
+```
+
+> If `python -m venv` fails with an `ensurepip` error, you are likely running it from a
+> Cygwin/MSYS shell whose `python` is a Unix-style build with a broken pip bootstrap.
+> Run the commands above from PowerShell or Command Prompt instead (using Windows Python,
+> e.g. Anaconda's), or Git Bash.
+
+This covers `hamming_distance`, `check_iri_exists`, `search_tib_best_match`, and both
+`/extract-iris` endpoints (success, error, and edge cases like blank keywords from the LLM).
+
+---
+
 ## Linux Service
 ### Create a systemd Service File
 

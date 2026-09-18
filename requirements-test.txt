@@ -1,0 +1,13 @@
+# Lightweight dependencies needed to run the test suite.
+# The heavy ML stack (torch, transformers, keybert, openai) is replaced with
+# stand-ins in tests/conftest.py, so it does NOT need to be installed to run
+# the tests - no GPU, model downloads, or API key required.
+
+fastapi==0.115.14
+httpx==0.28.1
+pydantic==2.11.7
+uvicorn==0.34.3
+
+pytest==8.4.2
+pytest-asyncio==1.4.0
+pytest-cov==7.1.0

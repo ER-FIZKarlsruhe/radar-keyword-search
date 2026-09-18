@@ -3,3 +3,7 @@
 __pycache__/
 nohup.out
 radar-keywords-env/
+radar-keywords-test-env/
+.pytest_cache/
+.coverage
+htmlcov/

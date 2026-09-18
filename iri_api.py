@@ -181,14 +181,15 @@ async def extract_iris_openai(req: DocumentRequest) -> Dict[str, Optional[Dict]]
         print("Extracted keywords:", keywords)
 
         ontology = req.ontology
+        ontology_collection = req.ontology_collection
         async with httpx.AsyncClient() as client:
             tasks = [
-                search_tib_best_match(kw, ontology, HAMMING_THRESHOLD, client)
+                search_tib_best_match(kw, ontology, ontology_collection, HAMMING_THRESHOLD, client)
                 for kw in clean_keywords
             ]
             results = await asyncio.gather(*tasks)
 
-        best_matches = {kw: result for (kw), result in zip(keywords, results)}
+        best_matches = {kw: result for kw, result in zip(clean_keywords, results)}
         return best_matches
 
     except Exception as e:
