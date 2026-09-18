@@ -1,7 +1,7 @@
 
 rd-search with TIB Terminology Service Support
 
-This service provides keyword extraction from documents using either a custom PubMedBERT-based model or OpenAI's ChatGPT (via KeyBERT LLM), followed by entity linking to the [TIB Terminology Service](https://api.terminology.tib.eu).
+This service provides keyword extraction from documents using one of two interchangeable backends — a custom PubMedBERT model (CPU only) or a local Ollama model (GPU-accelerated) — followed by entity linking to the [TIB Terminology Service](https://api.terminology.tib.eu).
 
 ---
 
@@ -15,20 +15,31 @@ python -m radar-keywords-env  && source radar-keywords-env/bin/activate
 pip install -r requirements.txt
 ```
 
-### 2. Set OpenAI API Key
+### 2. Choose a Backend
+
+The server picks **one** backend at startup, controlled by `EXTRACTION_BACKEND`. Only that
+backend's dependencies are loaded/required — selecting `pubmedbert` never needs an Ollama
+server, and selecting `ollama` never downloads the PubMedBERT model.
+
+| `EXTRACTION_BACKEND` | Description | Extra env vars |
+|---|---|---|
+| `pubmedbert` (default) | Local PubMedBERT model, runs on CPU, no external services | — |
+| `ollama` | A local/self-hosted [Ollama](https://ollama.com) model via its OpenAI-compatible API — use this on a machine with a dedicated GPU | `OLLAMA_BASE_URL` (optional, default `http://localhost:11434/v1`), `OLLAMA_MODEL` (optional, default `llama3`) |
 
 ```bash
-export CHAT_GPT_API_KEY=your_openai_api_key_here
+# Example: run against a local Ollama server with a specific model
+export EXTRACTION_BACKEND=ollama
+export OLLAMA_MODEL=mistral
 ```
 
-> This is required for the `/extract-iris-openai` endpoint. If the variable is not set, the server will raise a runtime error on startup.
+> The active backend is reported by the `/` health check endpoint.
 
 ---
 
 ## 🧠 Models Used
 
-* **Custom Model**: PubMedBERT (`microsoft/BiomedNLP-PubMedBERT-base-uncased-abstract-fulltext`)
-* **LLM (Optional)**: ChatGPT via KeyBERT's `KeyLLM` interface
+* **`pubmedbert`**: PubMedBERT (`microsoft/BiomedNLP-PubMedBERT-base-uncased-abstract-fulltext`), CPU only
+* **`ollama`**: Any chat-capable model served by a local Ollama instance, via KeyBERT's `KeyLLM` interface
 
 ---
 
@@ -42,20 +53,10 @@ uvicorn iri_api:app --reload --port 8001
 
 ---
 
-## 🧪 Usage Examples
+## 🧪 Usage Example
 
-### 1. Extract IRIs using OpenAI (ChatGPT)
-
-```bash
-curl --noproxy '*' -X POST http://localhost:8001/extract-iris-openai \
-  -H "Content-Type: application/json" \
-  -d '{
-        "document": "Experimental Data to the publication \"Mononuclear and multinuclear O^N^O-donor Zn(II) complexes as robust catalysts for the production and depolymerization of poly(lactide)\"",
-        "ontology": "et"
-      }'
-```
-
-### 2. Extract IRIs using PubMedBERT
+There is a single endpoint regardless of backend — whichever one is active via `EXTRACTION_BACKEND`
+is used automatically:
 
 ```bash
 curl --noproxy '*' -X POST http://localhost:8001/extract-iris \
@@ -70,10 +71,10 @@ curl --noproxy '*' -X POST http://localhost:8001/extract-iris \
 
 ## 🔍 How It Works
 
-1. **Keyword Extraction**:
+1. **Keyword Extraction** (`/extract-iris`):
 
-   * `/extract-iris`: Uses `KeyBERT` with PubMedBERT
-   * `/extract-iris-openai`: Uses `KeyLLM` with ChatGPT
+   * `pubmedbert` backend: uses `KeyBERT` with PubMedBERT
+   * `ollama` backend: uses `KeyLLM`, pointed at a local Ollama server's OpenAI-compatible chat API
 
 2. **IRI Linking via TIB**:
 
@@ -86,9 +87,11 @@ curl --noproxy '*' -X POST http://localhost:8001/extract-iris \
 ## 🛠 Configuration
 
 * **TIB API Endpoint**: `https://api.terminology.tib.eu/api/search`
-* **Environment Variable**:
+* **Environment Variables**:
 
-  * `CHAT_GPT_API_KEY`: Required for OpenAI keyword extraction
+  * `EXTRACTION_BACKEND`: `pubmedbert` (default) or `ollama`
+  * `OLLAMA_BASE_URL`: Optional, defaults to `http://localhost:11434/v1`
+  * `OLLAMA_MODEL`: Optional, defaults to `llama3`
 
 ---
 
@@ -126,7 +129,7 @@ curl --noproxy '*' -X POST http://localhost:8001/extract-iris \
 ## 🧪 Running the Tests
 
 The test suite does **not** need the GPU/ML stack (torch, transformers, keybert, openai)
-installed, a GPU, network access, or a real `CHAT_GPT_API_KEY` — `tests/conftest.py`
+installed, a GPU, network access, or a running Ollama server — `tests/conftest.py`
 replaces those heavy dependencies with lightweight stand-ins before `iri_api` is imported,
 and configures each one per test. Only the small web-framework packages are needed to run it:
 
@@ -155,8 +158,29 @@ pytest -q --cov=iri_api --cov-report=term-missing
 > Run the commands above from PowerShell or Command Prompt instead (using Windows Python,
 > e.g. Anaconda's), or Git Bash.
 
-This covers `hamming_distance`, `check_iri_exists`, `search_tib_best_match`, and both
-`/extract-iris` endpoints (success, error, and edge cases like blank keywords from the LLM).
+This covers `hamming_distance`, `check_iri_exists`, `search_tib_best_match`, and `/extract-iris`
+under both backends (success, error, and edge cases like blank keywords from the LLM).
+
+### Ollama Integration Test
+
+`integration_tests/` additionally has a real end-to-end test of the Ollama backend: it starts an
+actual Ollama server in a Docker container ([testcontainers](https://testcontainers.com)), pulls a
+small model (`qwen2.5:0.5b`) into it, and sends a real request through the FastAPI app. Unlike the
+suite above, this uses the **real** `keybert`/`openai`/`torch` packages (not stand-ins) and needs
+**Docker** running locally. It's deliberately kept separate from — and out of the default `pytest`
+run for — the fast suite above.
+
+```bash
+pip install -r integration_tests/requirements.txt
+pytest integration_tests
+```
+
+The pulled model is cached under `~/.cache/radar-keyword-search-ollama-test` on the host (mapped
+into the container), so repeat runs reuse it instead of re-downloading every time. Override the
+location with the `OLLAMA_TEST_CACHE_DIR` environment variable if needed.
+
+> The container always runs on CPU, even on a machine with an NVIDIA GPU — this test only needs to
+> prove the Ollama *wiring* works, not benchmark inference speed.
 
 ---
 
@@ -175,7 +199,11 @@ After=network.target
 User=admin
 Group=admin
 WorkingDirectory=/data/radar-keyword-search
-Environment="CHAT_GPT_API_KEY=your_value_here"
+Environment="EXTRACTION_BACKEND=pubmedbert"
+# On a GPU server running Ollama, use instead:
+# Environment="EXTRACTION_BACKEND=ollama"
+# Environment="OLLAMA_BASE_URL=http://localhost:11434/v1"
+# Environment="OLLAMA_MODEL=llama3"
 Environment="PATH=/data/radar-keyword-search/radar-keywords-env/bin"
 
 ExecStart=/data/radar-keyword-search/radar-keywords-env/bin/python -m uvicorn iri_api:app --host 0.0.0.0 --port 8001

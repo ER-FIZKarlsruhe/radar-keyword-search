@@ -1,0 +1,20 @@
+# Real (non-mocked) dependencies needed to exercise the actual Ollama
+# backend end-to-end. This is deliberately separate from requirements-test.txt:
+# these integration tests use the REAL keybert/openai packages (not stubs),
+# talking to a REAL Ollama server started via Docker (testcontainers).
+#
+# NOTE: torch is pinned without the CUDA-specific "+cu126" suffix used in the
+# project's main requirements.txt, since these tests only need to run on CPU.
+
+fastapi==0.115.14
+httpx==0.28.1
+pydantic==2.11.7
+uvicorn==0.34.3
+
+keybert==0.9.0
+openai==1.98.0
+torch==2.7.1
+
+testcontainers==4.15.0
+
+pytest==8.4.2
