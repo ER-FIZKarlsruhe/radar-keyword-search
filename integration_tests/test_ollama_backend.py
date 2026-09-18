@@ -46,8 +46,30 @@ def ollama_backend():
     # resets the container's docker-run kwargs, dropping that GPU request so
     # this always runs on CPU, matching what "CPU only" actually needs.
     container = OllamaContainer(ollama_home=OLLAMA_MODEL_CACHE_DIR).with_kwargs()
+
+    # testcontainers talks to the Docker Engine API directly rather than
+    # through the `docker` CLI, so it never picks up a proxy from the CLI's
+    # own config the way our top-level `docker build`/`run` do. Behind a
+    # corporate proxy, this container otherwise has no route to the
+    # internet to actually pull the model. Forward whatever proxy this
+    # process itself is using (baked in via Dockerfile.integration when run
+    # through runIntegrationTestsDocker.sh) so `ollama pull` can reach it.
+    for proxy_var in ("HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy"):
+        proxy_value = os.environ.get(proxy_var)
+        if proxy_value:
+            container = container.with_env(proxy_var, proxy_value)
+
     with container as ollama:
-        ollama.pull_model(MODEL_NAME)
+        # ollama.pull_model() shells out to `self.exec(...)` and never checks
+        # the exit code, so a failed pull (e.g. no network route to the
+        # model registry) is silently ignored - the model would then just be
+        # missing once the test actually tries to use it. Run the pull
+        # ourselves and fail fast with the real error instead.
+        pull_result = ollama.exec(f"ollama pull {MODEL_NAME}")
+        assert pull_result.exit_code == 0, (
+            f"'ollama pull {MODEL_NAME}' failed with exit code {pull_result.exit_code}:\n"
+            f"{pull_result.output.decode(errors='replace')}"
+        )
 
         os.environ["EXTRACTION_BACKEND"] = "ollama"
         os.environ["OLLAMA_BASE_URL"] = f"{ollama.get_endpoint()}/v1"
