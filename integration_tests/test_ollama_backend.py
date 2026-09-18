@@ -59,6 +59,12 @@ def ollama_backend():
         if proxy_value:
             container = container.with_env(proxy_var, proxy_value)
 
+    # Ollama's server only logs the outcome of an outbound registry request
+    # (DNS/TLS/proxy CONNECT failures etc.) when this is enabled - without
+    # it, a failed pull produces nothing but the generic "something went
+    # wrong" client-side error with no way to tell why.
+    container = container.with_env("OLLAMA_DEBUG", "1")
+
     with container as ollama:
         # ollama.pull_model() shells out to `self.exec(...)` and never checks
         # the exit code, so a failed pull (e.g. no network route to the
