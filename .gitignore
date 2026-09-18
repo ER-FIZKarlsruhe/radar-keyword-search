@@ -7,3 +7,4 @@ radar-keywords-test-env/
 .pytest_cache/
 .coverage
 htmlcov/
+test-results/

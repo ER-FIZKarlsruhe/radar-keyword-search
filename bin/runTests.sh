@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Run from the repo root regardless of where this script is invoked from.
+cd "$(dirname "$0")/.."
+
 python3 -m venv radar-keywords-test-env
 source radar-keywords-test-env/bin/activate
 

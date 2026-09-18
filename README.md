@@ -145,13 +145,18 @@ pip install -r requirements-test.txt
 pytest -q --cov=iri_api --cov-report=term-missing
 ```
 
-This exact flow is also checked in as `runTests.sh` (used by our Bamboo CI plan), which additionally
-honors `HTTP_PROXY`/`HTTPS_PROXY` when installing dependencies — needed on CI agents that have no
-direct internet access and can only reach PyPI through a corporate proxy:
+This exact flow is also checked in as `bin/runTests.sh` (used by our Bamboo CI plan), which
+additionally honors `HTTP_PROXY`/`HTTPS_PROXY` when installing dependencies — needed on CI agents
+that have no direct internet access and can only reach PyPI through a corporate proxy:
 
 ```bash
-HTTP_PROXY=http://proxy.example.com:8080 ./runTests.sh
+HTTP_PROXY=http://proxy.example.com:8080 ./bin/runTests.sh
 ```
+
+Bamboo actually runs the tests in a container instead, via `bin/runTestsDocker.sh` (which builds
+`docker/Dockerfile.test`) — this avoids depending on whatever Python happens to be installed on the
+build agent. It writes a JUnit XML report to `test-results/junit.xml` for Bamboo's test results.
+The Ollama integration test below has an equivalent `bin/runIntegrationTestsDocker.sh`.
 
 Leave `HTTP_PROXY`/`HTTPS_PROXY` unset for a normal, direct install (e.g. on a developer machine
 with unrestricted internet access).

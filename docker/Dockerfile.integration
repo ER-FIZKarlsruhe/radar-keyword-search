@@ -14,4 +14,4 @@ RUN pip install --no-cache-dir -r integration_tests/requirements.txt
 
 COPY . .
 
-CMD ["pytest", "-q", "integration_tests"]
+CMD ["pytest", "-q", "integration_tests", "--junitxml=test-results/junit-integration.xml"]

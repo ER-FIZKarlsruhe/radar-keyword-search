@@ -1,6 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Run from the repo root regardless of where this script is invoked from,
+# so the Docker build context and test-results output always land right.
+cd "$(dirname "$0")/.."
+
+# On Windows, Git Bash auto-converts anything that looks like a Unix path
+# into a Windows path before handing it to docker.exe - including the
+# *container-side* half of a `-v host:container` flag below, which must
+# stay a literal Linux path. Left unset, that mangles the bind mounts so
+# nothing actually lands in ./test-results on the host. No-op on Linux
+# (e.g. the real Bamboo agent), so always safe to set.
+export MSYS_NO_PATHCONV=1
+
 IMAGE_TAG="radar-keyword-search-integration-tests"
 OLLAMA_IMAGE="ollama/ollama:0.1.44"
 MODEL_NAME="qwen2.5:0.5b"
@@ -44,7 +56,7 @@ docker build \
   --build-arg HTTP_PROXY="${HTTP_PROXY_CLEAN:-}" \
   --build-arg HTTPS_PROXY="${HTTPS_PROXY_CLEAN:-}" \
   --build-arg NO_PROXY="${NO_PROXY:-}" \
-  -f Dockerfile.integration \
+  -f docker/Dockerfile.integration \
   -t "$IMAGE_TAG" \
   .
 
@@ -88,9 +100,12 @@ if ! docker exec "$OLLAMA_CONTAINER_NAME" ollama pull "$MODEL_NAME"; then
   exit 1
 fi
 
+mkdir -p test-results
+
 docker run --rm \
   --network "$NETWORK_NAME" \
   -e EXTRACTION_BACKEND=ollama \
   -e "OLLAMA_BASE_URL=http://${OLLAMA_CONTAINER_NAME}:11434/v1" \
   -e OLLAMA_MODEL="$MODEL_NAME" \
+  -v "$(pwd)/test-results:/app/test-results" \
   "$IMAGE_TAG"

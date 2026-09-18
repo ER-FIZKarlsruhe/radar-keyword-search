@@ -14,4 +14,4 @@ RUN pip install --no-cache-dir -r requirements-test.txt
 
 COPY . .
 
-CMD ["pytest", "-q", "--cov=iri_api", "--cov-report=term-missing"]
+CMD ["pytest", "-q", "--cov=iri_api", "--cov-report=term-missing", "--junitxml=test-results/junit.xml"]
