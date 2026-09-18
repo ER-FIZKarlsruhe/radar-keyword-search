@@ -1,16 +1,19 @@
 """
 End-to-end test of the Ollama backend against a REAL Ollama server.
 
-Starts an actual Ollama container via Docker (testcontainers), pulls a small
-model into it, points iri_api at it, and sends a real request through the
+Points iri_api at a real Ollama server and sends a real request through the
 FastAPI app. This is slow (pulls a container image and a model on first run,
 then runs real CPU inference) and requires Docker, so it's kept out of the
 default `pytest` run - see requirements.txt in this directory for what's
 needed to run it, and the "Ollama Integration Test" section in the README.
 
-Run with:
+Run locally (starts and tears down its own Ollama container via testcontainers):
     pip install -r integration_tests/requirements.txt
     pytest integration_tests
+
+Run via ../runIntegrationTestsDocker.sh (used by Bamboo): that script starts
+the Ollama server itself and pulls the model into it, then sets
+OLLAMA_BASE_URL before running pytest - see the ollama_backend fixture below.
 """
 import importlib
 import os
@@ -37,6 +40,23 @@ OLLAMA_MODEL_CACHE_DIR = Path(
 
 @pytest.fixture(scope="module")
 def ollama_backend():
+    # runIntegrationTestsDocker.sh starts its own Ollama server directly (as
+    # a sibling container on the host, not via testcontainers) and pulls the
+    # model into it *before* this test container even starts, then points
+    # us at it via OLLAMA_BASE_URL. That sidesteps Docker-outside-of-Docker
+    # entirely - no docker.sock mount, no separate proxy setup for a
+    # container started through the raw Docker Engine API. When that's
+    # already been done, just use it instead of starting a second server.
+    if os.environ.get("OLLAMA_BASE_URL"):
+        os.environ.setdefault("EXTRACTION_BACKEND", "ollama")
+        os.environ.setdefault("OLLAMA_MODEL", MODEL_NAME)
+
+        import iri_api
+
+        importlib.reload(iri_api)
+        yield iri_api
+        return
+
     OLLAMA_MODEL_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
     # OllamaContainer auto-requests a GPU device when the Docker daemon
