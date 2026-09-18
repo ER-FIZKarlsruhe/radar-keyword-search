@@ -22,6 +22,18 @@ HTTPS_PROXY_CLEAN="${HTTPS_PROXY_CLEAN%,}"
 OLLAMA_CACHE_DIR="${OLLAMA_TEST_CACHE_DIR:-$HOME/.cache/radar-keyword-search-ollama-test}"
 mkdir -p "$OLLAMA_CACHE_DIR"
 
+# The official ollama/ollama image sets OLLAMA_HOST=0.0.0.0 so the *server*
+# binds all interfaces - but `ollama pull`, run as a separate client process
+# via `docker exec`, also reads that same OLLAMA_HOST to know where to
+# connect *to*. With HTTP_PROXY/HTTPS_PROXY set, that local client->server
+# call gets routed through the proxy too unless NO_PROXY exempts it - and
+# it's "0.0.0.0" specifically that needs the exemption, not "localhost" or
+# "127.0.0.1" (confirmed by reproducing this locally: those two alone still
+# failed with "could not connect to ollama app, is it running?"; adding
+# 0.0.0.0 fixed it). Keep all three so this doesn't quietly break again if
+# the image's OLLAMA_HOST default ever changes.
+OLLAMA_NO_PROXY="0.0.0.0,localhost,127.0.0.1${NO_PROXY:+,$NO_PROXY}"
+
 cleanup() {
   docker rm -f "$OLLAMA_CONTAINER_NAME" >/dev/null 2>&1 || true
   docker network rm "$NETWORK_NAME" >/dev/null 2>&1 || true
@@ -49,7 +61,7 @@ docker run -d \
   --network "$NETWORK_NAME" \
   -e HTTP_PROXY="${HTTP_PROXY_CLEAN:-}" \
   -e HTTPS_PROXY="${HTTPS_PROXY_CLEAN:-}" \
-  -e NO_PROXY="${NO_PROXY:-}" \
+  -e NO_PROXY="$OLLAMA_NO_PROXY" \
   -e OLLAMA_DEBUG=1 \
   -v "$OLLAMA_CACHE_DIR:/root/.ollama" \
   "$OLLAMA_IMAGE" >/dev/null
