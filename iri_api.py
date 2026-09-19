@@ -65,6 +65,21 @@ elif EXTRACTION_BACKEND == "ollama":
     from keybert.llm import OpenAI as OpenAIWrapper
     import openai
 
+    # KeyBERT's own DEFAULT_CHAT_PROMPT ("...Use the following format separated
+    # by commas: <keywords>") is a weak instruction - chat-tuned models like
+    # llama3 often ignore it and answer conversationally instead, e.g. "Here are
+    # the extracted keywords: cell". KeyLLM then does a naive response.split(","),
+    # so without a comma in that reply the whole sentence becomes one "keyword".
+    # This prompt spells out the no-preamble requirement explicitly to stop that.
+    KEYWORD_EXTRACTION_PROMPT = """I have the following document:
+[DOCUMENT]
+
+Extract the keywords that best describe the topic of the text.
+Respond with ONLY the keywords, separated by commas. Do not include any
+introduction, explanation, or other text before or after the list.
+
+Example response: keyword1, keyword2, keyword3"""
+
     base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
     llm_model = os.getenv("OLLAMA_MODEL", "llama3")
     # Ollama doesn't check the API key, but the OpenAI client requires one.
@@ -79,7 +94,14 @@ elif EXTRACTION_BACKEND == "ollama":
     ollama_http_client = httpx.Client(proxy=ollama_proxy) if ollama_proxy else httpx.Client(trust_env=False)
     llm_client = openai.OpenAI(api_key="ollama", base_url=base_url, http_client=ollama_http_client)
 
-    llm_wrapper = OpenAIWrapper(llm_client, model=llm_model, chat=True)
+    llm_wrapper = OpenAIWrapper(
+        llm_client,
+        model=llm_model,
+        chat=True,
+        prompt=KEYWORD_EXTRACTION_PROMPT,
+        system_prompt="You extract keywords from text. You respond with only the requested "
+                       "output and never add commentary, explanations, or introductory phrases.",
+    )
     llm_kw_model = KeyLLM(llm_wrapper)
 
 # -------------------------------
@@ -153,6 +175,21 @@ async def search_tib_best_match(keyword: str, ontology: Optional[str],  ontology
         return best_match
     return None
 
+def _strip_llm_preamble(keyword: str) -> str:
+    """Defensive cleanup for chat models that answer with a lead-in sentence
+    (e.g. "Here are the extracted keywords: cell") despite the prompt asking
+    for just the list. KeyLLM's own parsing is a naive response.split(","), so
+    a single-keyword reply with no comma survives as one bogus "keyword"
+    otherwise. Only strips when the text before the colon reads like a
+    sentence (contains a space), so a legitimate keyword that happens to
+    contain a colon is left alone.
+    """
+    if ":" in keyword:
+        prefix, _, rest = keyword.rpartition(":")
+        if " " in prefix and rest.strip():
+            return rest.strip()
+    return keyword
+
 def _extract_keyword_list(document: str) -> list:
     """Extract a flat list of candidate keywords using the active backend."""
     if EXTRACTION_BACKEND == "pubmedbert":
@@ -169,7 +206,11 @@ def _extract_keyword_list(document: str) -> list:
     raw_keywords = llm_kw_model.extract_keywords(document)
     if raw_keywords and isinstance(raw_keywords[0], list):
         raw_keywords = raw_keywords[0]
-    return [kw.strip() for kw in raw_keywords if kw and kw.strip()]
+    return [
+        _strip_llm_preamble(kw.strip())
+        for kw in raw_keywords
+        if kw and kw.strip()
+    ]
 
 # -------------------------------
 # Request Schema

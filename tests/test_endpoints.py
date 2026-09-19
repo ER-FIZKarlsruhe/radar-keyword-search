@@ -119,3 +119,23 @@ def test_extract_iris_via_ollama_backend_handles_no_keywords_found(load_backend)
 
     assert response.status_code == 200
     assert response.json() == {}
+
+
+def test_extract_iris_via_ollama_backend_strips_a_conversational_lead_in(load_backend, monkeypatch):
+    # Despite the stricter prompt, a chat model may still answer with a
+    # lead-in sentence instead of a bare keyword when there's only one -
+    # KeyLLM's own parsing does a naive response.split(","), so with no comma
+    # in the reply the whole sentence survives as a single bogus "keyword".
+    mod = load_backend("ollama")
+    mod.llm_kw_model.extract_keywords.return_value = ["Here are the extracted keywords: cell"]
+
+    async def fake_search(keyword, ontology, ontology_collection, threshold, client):
+        return {"iri": f"https://example.org/{keyword}"}
+
+    monkeypatch.setattr(mod, "search_tib_best_match", fake_search)
+
+    with _client(mod) as client:
+        response = client.post("/extract-iris", json={"document": "cell"})
+
+    assert response.status_code == 200
+    assert response.json() == {"cell": {"iri": "https://example.org/cell"}}

@@ -26,6 +26,19 @@ def test_ollama_backend_uses_local_endpoint_by_default(load_backend):
     assert wrapper_kwargs["chat"] is True
 
 
+def test_ollama_backend_uses_a_prompt_that_forbids_a_conversational_reply(load_backend):
+    # KeyBERT's own DEFAULT_CHAT_PROMPT is weak enough that llama3 sometimes
+    # answers "Here are the extracted keywords: cell" instead of just "cell" -
+    # our own prompt must explicitly rule that out.
+    mod = load_backend("ollama")
+
+    _, wrapper_kwargs = mod.OpenAIWrapper.call_args
+    assert "[DOCUMENT]" in wrapper_kwargs["prompt"]
+    assert "ONLY" in wrapper_kwargs["prompt"]
+    assert "introduction" in wrapper_kwargs["prompt"].lower()
+    assert "commentary" in wrapper_kwargs["system_prompt"].lower()
+
+
 def test_ollama_base_url_and_model_are_overridable(load_backend):
     mod = load_backend(
         "ollama",
