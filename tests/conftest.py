@@ -26,7 +26,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-for _module_name in ("torch", "transformers", "keybert", "keybert.llm", "openai", "numpy"):
+for _module_name in ("torch", "transformers", "keybert", "openai", "numpy"):
     sys.modules[_module_name] = MagicMock()
 
 os.environ.setdefault("EXTRACTION_BACKEND", "pubmedbert")
@@ -46,13 +46,13 @@ def load_backend(monkeypatch):
             monkeypatch.setenv(key, value)
         importlib.reload(iri_api)
         # MagicMock memoizes call_args/return_value/side_effect on the
-        # stubbed keybert module, so the "new" kw_model/llm_kw_model
+        # stubbed keybert/openai modules, so the "new" kw_model/llm_client
         # created by this reload can actually be the *same* mock object a
         # previous test configured. Start every reload from a clean slate.
         if iri_api.kw_model is not None:
             iri_api.kw_model.extract_keywords.reset_mock(return_value=True, side_effect=True)
-        if iri_api.llm_kw_model is not None:
-            iri_api.llm_kw_model.extract_keywords.reset_mock(return_value=True, side_effect=True)
+        if iri_api.llm_client is not None:
+            iri_api.llm_client.chat.completions.create.reset_mock(return_value=True, side_effect=True)
         return iri_api
 
     yield _load
@@ -69,5 +69,5 @@ def _reset_ml_mocks():
     yield
     if iri_api.kw_model is not None:
         iri_api.kw_model.extract_keywords.reset_mock(return_value=True, side_effect=True)
-    if iri_api.llm_kw_model is not None:
-        iri_api.llm_kw_model.extract_keywords.reset_mock(return_value=True, side_effect=True)
+    if iri_api.llm_client is not None:
+        iri_api.llm_client.chat.completions.create.reset_mock(return_value=True, side_effect=True)

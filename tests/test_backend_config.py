@@ -1,4 +1,12 @@
+from unittest.mock import MagicMock
+
 import pytest
+
+
+def _fake_chat_completion(content: str):
+    message = MagicMock(content=content)
+    choice = MagicMock(message=message)
+    return MagicMock(choices=[choice])
 
 
 def test_invalid_backend_raises_at_import_time(load_backend):
@@ -10,33 +18,37 @@ def test_pubmedbert_backend_does_not_talk_to_ollama(load_backend):
     mod = load_backend("pubmedbert")
 
     assert mod.kw_model is not None
-    assert mod.llm_kw_model is None
+    assert mod.llm_client is None
 
 
 def test_ollama_backend_uses_local_endpoint_by_default(load_backend):
     mod = load_backend("ollama")
 
     assert mod.kw_model is None
-    assert mod.llm_kw_model is not None
+    assert mod.llm_client is not None
+    assert mod.llm_model == "llama3"
 
     _, client_kwargs = mod.openai.OpenAI.call_args
     assert client_kwargs["base_url"] == "http://localhost:11434/v1"
-    _, wrapper_kwargs = mod.OpenAIWrapper.call_args
-    assert wrapper_kwargs["model"] == "llama3"
-    assert wrapper_kwargs["chat"] is True
 
 
-def test_ollama_backend_uses_a_prompt_that_forbids_a_conversational_reply(load_backend):
-    # KeyBERT's own DEFAULT_CHAT_PROMPT is weak enough that llama3 sometimes
-    # answers "Here are the extracted keywords: cell" instead of just "cell" -
-    # our own prompt must explicitly rule that out.
+def test_ollama_backend_requests_structured_json_output(load_backend):
+    # A chat model can ignore an informal "respond with ONLY the keywords,
+    # separated by commas" instruction and answer conversationally instead
+    # (e.g. "Here are the extracted keywords: cell"). response_format=
+    # {"type": "json_object"} constrains the model's output via
+    # grammar-constrained decoding, so there's no free-form prose for a
+    # lead-in/sign-off sentence to leak through - see
+    # _extract_keywords_via_ollama.
     mod = load_backend("ollama")
+    mod.llm_client.chat.completions.create.return_value = _fake_chat_completion('{"keywords": []}')
 
-    _, wrapper_kwargs = mod.OpenAIWrapper.call_args
-    assert "[DOCUMENT]" in wrapper_kwargs["prompt"]
-    assert "ONLY" in wrapper_kwargs["prompt"]
-    assert "introduction" in wrapper_kwargs["prompt"].lower()
-    assert "commentary" in wrapper_kwargs["system_prompt"].lower()
+    mod._extract_keywords_via_ollama("some document")
+
+    _, kwargs = mod.llm_client.chat.completions.create.call_args
+    assert kwargs["response_format"] == {"type": "json_object"}
+    assert "json" in mod.OLLAMA_KEYWORD_EXTRACTION_SYSTEM_PROMPT.lower()
+    assert "keywords" in mod.OLLAMA_KEYWORD_EXTRACTION_SYSTEM_PROMPT.lower()
 
 
 def test_ollama_base_url_and_model_are_overridable(load_backend):
@@ -48,8 +60,7 @@ def test_ollama_base_url_and_model_are_overridable(load_backend):
 
     _, client_kwargs = mod.openai.OpenAI.call_args
     assert client_kwargs["base_url"] == "http://gpu-box:11434/v1"
-    _, wrapper_kwargs = mod.OpenAIWrapper.call_args
-    assert wrapper_kwargs["model"] == "mistral"
+    assert mod.llm_model == "mistral"
 
 
 def test_ollama_backend_bypasses_the_system_proxy_by_default(load_backend, monkeypatch):

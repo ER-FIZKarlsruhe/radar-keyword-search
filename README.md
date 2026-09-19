@@ -54,11 +54,12 @@ curl -v --noproxy '*' -X POST http://localhost:8000/extract-iris \
 The backend is picked at container start via the `EXTRACTION_BACKEND` environment variable — pass
 it (and any backend-specific variables) with `-e` on `docker run`.
 
-First, start an Ollama server and pull a model into it. `llama3` is the default — it follows the
-comma-separated keyword-list format KeyBERT's `KeyLLM` prompts for reliably; much smaller models
-(e.g. `qwen2.5:0.5b`) tend to ignore that formatting instruction and return everything as a single
-garbled keyword instead of a clean list. Put Ollama on its own Docker network so the
-`radar-keyword-search` container can reach it by name:
+First, start an Ollama server and pull a model into it. `llama3` is the default. Keyword extraction
+requests `response_format={"type": "json_object"}` from Ollama's OpenAI-compatible API, which
+constrains the model's output to valid JSON via grammar-constrained decoding regardless of the
+model, so this works reliably even with much smaller models (e.g. `qwen2.5:0.5b`, used in the
+integration test). Put Ollama on its own Docker network so the `radar-keyword-search` container can
+reach it by name:
 
 ```bash
 docker network create radar-net
@@ -201,7 +202,8 @@ curl --noproxy '*' -X POST http://localhost:8001/extract-iris \
 ## 🧠 Models Used
 
 * **`pubmedbert`**: PubMedBERT (`microsoft/BiomedNLP-PubMedBERT-base-uncased-abstract-fulltext`), CPU only
-* **`ollama`**: Any chat-capable model served by a local Ollama instance, via KeyBERT's `KeyLLM` interface
+* **`ollama`**: Any chat-capable model served by a local Ollama instance, called directly via its
+  OpenAI-compatible API with structured (`response_format={"type": "json_object"}`) output
 
 ---
 
@@ -210,7 +212,8 @@ curl --noproxy '*' -X POST http://localhost:8001/extract-iris \
 1. **Keyword Extraction** (`/extract-iris`):
 
    * `pubmedbert` backend: uses `KeyBERT` with PubMedBERT
-   * `ollama` backend: uses `KeyLLM`, pointed at a local Ollama server's OpenAI-compatible chat API
+   * `ollama` backend: calls a local Ollama server's OpenAI-compatible chat API directly, requesting
+     structured JSON output
 
 2. **IRI Linking via TIB**:
 

@@ -4,6 +4,7 @@ from typing import Dict, Optional
 import uvicorn
 import asyncio
 import httpx
+import json
 import os
 
 from urllib.parse import quote
@@ -26,7 +27,8 @@ if EXTRACTION_BACKEND not in VALID_BACKENDS:
     )
 
 kw_model = None
-llm_kw_model = None
+llm_client = None
+llm_model = None
 
 # -------------------------------
 # PubMedBERT Setup (CPU only)
@@ -58,27 +60,32 @@ if EXTRACTION_BACKEND == "pubmedbert":
 # -------------------------------
 # LLM Setup: Ollama
 # -------------------------------
-# Ollama exposes an OpenAI-compatible chat API, so it's used via KeyBERT's
-# OpenAI wrapper - just pointed at Ollama's endpoint with a placeholder key.
+# Ollama exposes an OpenAI-compatible chat API. This talks to it directly
+# with the `openai` client rather than through KeyBERT's KeyLLM/OpenAI
+# wrapper: KeyLLM's extract_keywords() always does a naive
+# response.choices[0].message.content.split(",") on the raw reply, so a chat
+# model that ignores the "respond with ONLY the keywords" instruction and
+# answers conversationally (e.g. "Sure! Here are the keywords: ...") leaks
+# its lead-in/sign-off sentences through as bogus keywords - no prompt
+# wording closed that gap completely. Requesting response_format=
+# {"type": "json_object"} instead constrains the model's output to valid
+# JSON via grammar-constrained decoding, so there's no free-form prose left
+# for a leak to hide in, and parsing it doesn't depend on the model
+# following an informal "separated by commas" instruction at all.
 elif EXTRACTION_BACKEND == "ollama":
-    from keybert import KeyLLM
-    from keybert.llm import OpenAI as OpenAIWrapper
     import openai
 
-    # KeyBERT's own DEFAULT_CHAT_PROMPT ("...Use the following format separated
-    # by commas: <keywords>") is a weak instruction - chat-tuned models like
-    # llama3 often ignore it and answer conversationally instead, e.g. "Here are
-    # the extracted keywords: cell". KeyLLM then does a naive response.split(","),
-    # so without a comma in that reply the whole sentence becomes one "keyword".
-    # This prompt spells out the no-preamble requirement explicitly to stop that.
-    KEYWORD_EXTRACTION_PROMPT = """I have the following document:
+    OLLAMA_KEYWORD_EXTRACTION_SYSTEM_PROMPT = (
+        "You extract keywords from text. Respond with ONLY a JSON object of the exact "
+        'shape {"keywords": ["keyword1", "keyword2", ...]} and nothing else - no '
+        "commentary, explanations, or introductory phrases."
+    )
+
+    OLLAMA_KEYWORD_EXTRACTION_PROMPT = """I have the following document:
 [DOCUMENT]
 
 Extract the keywords that best describe the topic of the text.
-Respond with ONLY the keywords, separated by commas. Do not include any
-introduction, explanation, or other text before or after the list.
-
-Example response: keyword1, keyword2, keyword3"""
+Respond with a JSON object of the exact shape {"keywords": ["keyword1", "keyword2", ...]}."""
 
     base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
     llm_model = os.getenv("OLLAMA_MODEL", "llama3")
@@ -93,16 +100,6 @@ Example response: keyword1, keyword2, keyword3"""
     ollama_proxy = os.getenv("OLLAMA_HTTP_PROXY")
     ollama_http_client = httpx.Client(proxy=ollama_proxy) if ollama_proxy else httpx.Client(trust_env=False)
     llm_client = openai.OpenAI(api_key="ollama", base_url=base_url, http_client=ollama_http_client)
-
-    llm_wrapper = OpenAIWrapper(
-        llm_client,
-        model=llm_model,
-        chat=True,
-        prompt=KEYWORD_EXTRACTION_PROMPT,
-        system_prompt="You extract keywords from text. You respond with only the requested "
-                       "output and never add commentary, explanations, or introductory phrases.",
-    )
-    llm_kw_model = KeyLLM(llm_wrapper)
 
 # -------------------------------
 # Supporting Functions
@@ -179,20 +176,27 @@ async def search_tib_best_match(keyword: str, ontology: Optional[str],  ontology
         return best_match
     return None
 
-def _strip_llm_preamble(keyword: str) -> str:
-    """Defensive cleanup for chat models that answer with a lead-in sentence
-    (e.g. "Here are the extracted keywords: cell") despite the prompt asking
-    for just the list. KeyLLM's own parsing is a naive response.split(","), so
-    a single-keyword reply with no comma survives as one bogus "keyword"
-    otherwise. Only strips when the text before the colon reads like a
-    sentence (contains a space), so a legitimate keyword that happens to
-    contain a colon is left alone.
+def _extract_keywords_via_ollama(document: str) -> list:
+    """Extract keywords from the configured Ollama chat model as a JSON array.
+
+    Calls the OpenAI-compatible client directly with
+    response_format={"type": "json_object"} instead of going through
+    KeyBERT's KeyLLM (see the module-level comment above the Ollama setup for
+    why): the model can't leak conversational prose through the result
+    because it's constrained to emit valid JSON in the first place.
     """
-    if ":" in keyword:
-        prefix, _, rest = keyword.rpartition(":")
-        if " " in prefix and rest.strip():
-            return rest.strip()
-    return keyword
+    prompt = OLLAMA_KEYWORD_EXTRACTION_PROMPT.replace("[DOCUMENT]", document)
+    response = llm_client.chat.completions.create(
+        model=llm_model,
+        messages=[
+            {"role": "system", "content": OLLAMA_KEYWORD_EXTRACTION_SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+        ],
+        response_format={"type": "json_object"},
+    )
+    parsed = json.loads(response.choices[0].message.content)
+    keywords = parsed.get("keywords", []) if isinstance(parsed, dict) else []
+    return [str(kw).strip() for kw in keywords if str(kw).strip()]
 
 def _extract_keyword_list(document: str) -> list:
     """Extract a flat list of candidate keywords using the active backend."""
@@ -205,16 +209,7 @@ def _extract_keyword_list(document: str) -> list:
         )
         return [kw for kw, _ in keyword_scores]
 
-    # ollama: KeyLLM may return a flat list or a list-of-lists (one list per
-    # input document), and can include blank entries.
-    raw_keywords = llm_kw_model.extract_keywords(document)
-    if raw_keywords and isinstance(raw_keywords[0], list):
-        raw_keywords = raw_keywords[0]
-    return [
-        _strip_llm_preamble(kw.strip())
-        for kw in raw_keywords
-        if kw and kw.strip()
-    ]
+    return _extract_keywords_via_ollama(document)
 
 # -------------------------------
 # Request Schema

@@ -23,15 +23,16 @@ from unittest.mock import MagicMock
 import pytest
 from fastapi.testclient import TestClient
 
-_STUBBED_MODULES = ("torch", "transformers", "keybert", "keybert.llm", "openai")
+_STUBBED_MODULES = ("torch", "transformers", "keybert", "openai")
 
 
 @pytest.fixture
 def real_tib_backend(monkeypatch):
     # The "ollama" backend is used purely as a lightweight way to get a
-    # module state whose extract_keywords is easy to fake (see below) -
-    # llm_kw_model's OpenAI client is constructed but never actually called,
-    # so no Ollama server needs to be running for this.
+    # module state whose keyword extraction is easy to fake (see below) - by
+    # monkeypatching _extract_keyword_list directly, the OpenAI client is
+    # constructed but never actually called, so no Ollama server needs to be
+    # running for this.
     original_modules = {name: sys.modules.get(name) for name in _STUBBED_MODULES}
     for name in _STUBBED_MODULES:
         sys.modules[name] = MagicMock()
@@ -58,8 +59,8 @@ def real_tib_backend(monkeypatch):
                 sys.modules[name] = original
 
 
-def test_extract_iris_resolves_real_chebi_matches_via_the_tib_service(real_tib_backend):
-    real_tib_backend.llm_kw_model.extract_keywords.return_value = ["insulin", "glucose"]
+def test_extract_iris_resolves_real_chebi_matches_via_the_tib_service(real_tib_backend, monkeypatch):
+    monkeypatch.setattr(real_tib_backend, "_extract_keyword_list", lambda document: ["insulin", "glucose"])
 
     with TestClient(real_tib_backend.app) as client:
         response = client.post(
@@ -79,14 +80,14 @@ def test_extract_iris_resolves_real_chebi_matches_via_the_tib_service(real_tib_b
         assert match["best_term"] == keyword
 
 
-def test_extract_iris_resolves_real_matches_scoped_to_a_collection(real_tib_backend):
+def test_extract_iris_resolves_real_matches_scoped_to_a_collection(real_tib_backend, monkeypatch):
     # radar-frontend (KeywordService.groovy) sends a workspace/contract's configured
     # ontology collection id verbatim, e.g. lowercase "nfdi4chem" as typed into the
     # workspace's technical metadata. TIB's classification filter only recognizes the
     # uppercase collection id, so this exercises the case-normalization in
     # search_tib_best_match end-to-end against the real service, not just the URL
     # string built in the unit tests.
-    real_tib_backend.llm_kw_model.extract_keywords.return_value = ["apoptosis"]
+    monkeypatch.setattr(real_tib_backend, "_extract_keyword_list", lambda document: ["apoptosis"])
 
     with TestClient(real_tib_backend.app) as client:
         response = client.post(
