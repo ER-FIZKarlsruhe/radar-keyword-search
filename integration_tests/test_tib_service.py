@@ -77,3 +77,28 @@ def test_extract_iris_resolves_real_chebi_matches_via_the_tib_service(real_tib_b
         assert match["iri"].startswith("http://purl.obolibrary.org/obo/CHEBI_")
         assert match["distance"] == 0
         assert match["best_term"] == keyword
+
+
+def test_extract_iris_resolves_real_matches_scoped_to_a_collection(real_tib_backend):
+    # radar-frontend (KeywordService.groovy) sends a workspace/contract's configured
+    # ontology collection id verbatim, e.g. lowercase "nfdi4chem" as typed into the
+    # workspace's technical metadata. TIB's classification filter only recognizes the
+    # uppercase collection id, so this exercises the case-normalization in
+    # search_tib_best_match end-to-end against the real service, not just the URL
+    # string built in the unit tests.
+    real_tib_backend.llm_kw_model.extract_keywords.return_value = ["apoptosis"]
+
+    with TestClient(real_tib_backend.app) as client:
+        response = client.post(
+            "/extract-iris",
+            json={"document": "apoptosis", "ontology_collection": "nfdi4chem"},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+
+    assert set(body) == {"apoptosis"}
+    match = body["apoptosis"]
+    assert match is not None, "expected a real match for 'apoptosis' scoped to the NFDI4Chem collection"
+    assert match["iri"] == "http://purl.obolibrary.org/obo/NCIT_C17557"
+    assert match["ontology_name"] == "ncit"

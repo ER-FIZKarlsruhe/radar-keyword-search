@@ -107,7 +107,10 @@ async def search_tib_best_match(keyword: str, ontology: Optional[str],  ontology
         url += f"&ontology={ontology}"
 
     if ontology_collection:
-        url += f"&schema=collection&classification={ontology_collection}"
+        # TIB's classification filter is case-sensitive and only recognizes the
+        # uppercase collection id (e.g. "NFDI4CHEM"); a lowercase/mixed-case value
+        # is silently treated as unrecognized and matches nothing, with no error.
+        url += f"&schema=collection&classification={ontology_collection.upper()}"
 
 
     print(f"TIB request url: {url}")

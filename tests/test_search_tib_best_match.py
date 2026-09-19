@@ -78,4 +78,40 @@ async def test_includes_ontology_and_collection_filters_in_the_request():
 
     assert "ontology=chebi" in seen_urls[0]
     assert "schema=collection" in seen_urls[0]
-    assert "classification=cs" in seen_urls[0]
+    assert "classification=CS" in seen_urls[0]
+
+
+async def test_includes_collection_filter_without_an_ontology():
+    # This is the shape radar-frontend actually sends: a workspace/contract can be
+    # configured with only an ontology collection (no single ontology), e.g.
+    # KeywordService.groovy's request body {"document": ..., "ontology_collection": "nfdi4chem"}.
+    seen_urls = []
+
+    def handler(request):
+        seen_urls.append(str(request.url))
+        return httpx.Response(200, json={"response": {"docs": []}})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        await search_tib_best_match("apoptosis", None, "nfdi4chem", threshold=5, client=client)
+
+    assert "ontology=" not in seen_urls[0]
+    assert "schema=collection" in seen_urls[0]
+    assert "classification=NFDI4CHEM" in seen_urls[0]
+
+
+async def test_uppercases_the_collection_id_regardless_of_input_casing():
+    # TIB's classification filter is case-sensitive and only recognizes the
+    # uppercase collection id (e.g. "NFDI4CHEM"); a lowercase/mixed-case value is
+    # silently treated as unrecognized and matches nothing, with no error at all.
+    # See: https://api.terminology.tib.eu/api/search?classification=nfdi4chem always
+    # returns zero docs, while classification=NFDI4CHEM returns real matches.
+    seen_urls = []
+
+    def handler(request):
+        seen_urls.append(str(request.url))
+        return httpx.Response(200, json={"response": {"docs": []}})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        await search_tib_best_match("apoptosis", None, "Nfdi4Chem", threshold=5, client=client)
+
+    assert "classification=NFDI4CHEM" in seen_urls[0]
