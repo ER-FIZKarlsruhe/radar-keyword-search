@@ -66,6 +66,18 @@ async def test_returns_none_when_the_search_request_fails():
     assert result is None
 
 
+async def test_returns_none_when_the_search_request_returns_a_server_error():
+    # A single term's TIB lookup returning a non-2xx status (e.g. a transient 500)
+    # must not fail the whole /extract-iris batch - see asyncio.gather in extract_iris.
+    def handler(request):
+        return httpx.Response(500)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        result = await search_tib_best_match("insulin", None, None, threshold=5, client=client)
+
+    assert result is None
+
+
 async def test_includes_ontology_and_collection_filters_in_the_request():
     seen_urls = []
 

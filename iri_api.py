@@ -140,7 +140,11 @@ async def search_tib_best_match(keyword: str, ontology: Optional[str],  ontology
     try:
         response = await client.get(url, timeout=10)
         response.raise_for_status()
-    except httpx.RequestError:
+    except httpx.HTTPError:
+        # Covers both connection-level failures (httpx.RequestError) and
+        # non-2xx responses (httpx.HTTPStatusError from raise_for_status()).
+        # A single term's TIB lookup failing should not fail the whole batch
+        # in extract_iris's asyncio.gather - skip just this term instead.
         return None
 
     data = response.json()
