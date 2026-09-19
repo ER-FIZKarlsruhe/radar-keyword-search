@@ -16,10 +16,11 @@ app = FastAPI()
 # -------------------------------
 # EXTRACTION_BACKEND picks which keyword-extraction model this server instance
 # uses. Only that backend's dependencies are loaded, so choosing "ollama"
-# never downloads the PubMedBERT model, and choosing "pubmedbert" never
-# requires an Ollama server.
-VALID_BACKENDS = {"pubmedbert", "ollama"}
-EXTRACTION_BACKEND = os.getenv("EXTRACTION_BACKEND", "pubmedbert").strip().lower()
+# never downloads a BERT model, and choosing "bert" never requires an Ollama
+# server. Which specific BERT model "bert" serves is a separate, per-request
+# choice - see BERT_MODEL_REGISTRY below.
+VALID_BACKENDS = {"bert", "ollama"}
+EXTRACTION_BACKEND = os.getenv("EXTRACTION_BACKEND", "bert").strip().lower()
 if EXTRACTION_BACKEND not in VALID_BACKENDS:
     raise RuntimeError(
         f"Invalid EXTRACTION_BACKEND '{EXTRACTION_BACKEND}'. "
@@ -31,31 +32,71 @@ llm_client = None
 llm_model = None
 
 # -------------------------------
-# PubMedBERT Setup (CPU only)
+# BERT model registry
 # -------------------------------
-if EXTRACTION_BACKEND == "pubmedbert":
+# Alternative embedding models the "bert" backend can serve, selectable
+# per-request via DocumentRequest.model. They're all BERT-family encoders
+# loaded through the same AutoTokenizer/AutoModel + mean-pooling path, so
+# adding a new one only means adding an entry here.
+BERT_MODEL_REGISTRY = {
+    "pubmedbert": "microsoft/BiomedNLP-PubMedBERT-base-uncased-abstract-fulltext",
+    "pubmedbert-large": "microsoft/BiomedNLP-PubMedBERT-large-uncased-abstract",
+    "biobert": "dmis-lab/biobert-base-cased-v1.1",
+    "scibert": "allenai/scibert_scivocab_uncased",
+    "sapbert": "cambridgeltl/SapBERT-from-PubMedBERT-fulltext",
+}
+DEFAULT_BERT_MODEL = os.getenv("BERT_MODEL", "pubmedbert").strip().lower()
+if DEFAULT_BERT_MODEL not in BERT_MODEL_REGISTRY:
+    raise RuntimeError(
+        f"Invalid BERT_MODEL '{DEFAULT_BERT_MODEL}'. "
+        f"Must be one of: {', '.join(sorted(BERT_MODEL_REGISTRY))}."
+    )
+
+# Loaded lazily (see get_bert_model) and cached here, keyed by registry name,
+# so a request for a non-default model only pays the load cost once.
+_bert_model_cache: Dict[str, object] = {}
+
+# -------------------------------
+# BERT Setup (CPU only)
+# -------------------------------
+if EXTRACTION_BACKEND == "bert":
     from transformers import AutoTokenizer, AutoModel
     from keybert import KeyBERT
     import torch
 
-    model_name = "microsoft/BiomedNLP-PubMedBERT-base-uncased-abstract-fulltext"
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
-    model = AutoModel.from_pretrained(model_name)
-
-    def mean_pooling(model_output, attention_mask):
+    def _mean_pooling(model_output, attention_mask):
         token_embeddings = model_output[0]
         input_mask_expanded = attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
         return torch.sum(token_embeddings * input_mask_expanded, 1) / torch.clamp(input_mask_expanded.sum(1), min=1e-9)
 
-    class PubMedBERTEmbedding:
+    class _BertEmbedding:
+        def __init__(self, model_name: str):
+            self._tokenizer = AutoTokenizer.from_pretrained(model_name)
+            self._model = AutoModel.from_pretrained(model_name)
+
         def __call__(self, docs, **kwargs):
-            encoded_input = tokenizer(docs, padding=True, truncation=True, return_tensors='pt')
+            encoded_input = self._tokenizer(docs, padding=True, truncation=True, return_tensors='pt')
             with torch.no_grad():
-                model_output = model(**encoded_input)
-            embeddings = mean_pooling(model_output, encoded_input['attention_mask'])
+                model_output = self._model(**encoded_input)
+            embeddings = _mean_pooling(model_output, encoded_input['attention_mask'])
             return embeddings.cpu().numpy()
 
-    kw_model = KeyBERT(model=PubMedBERTEmbedding())
+    def get_bert_model(model_key: str) -> "KeyBERT":
+        """Return the KeyBERT instance for model_key, loading and caching it on first use."""
+        if model_key not in BERT_MODEL_REGISTRY:
+            raise ValueError(
+                f"Unknown BERT model '{model_key}'. "
+                f"Must be one of: {', '.join(sorted(BERT_MODEL_REGISTRY))}."
+            )
+        if model_key not in _bert_model_cache:
+            print(f"Loading BERT model '{model_key}' ({BERT_MODEL_REGISTRY[model_key]})...")
+            _bert_model_cache[model_key] = KeyBERT(model=_BertEmbedding(BERT_MODEL_REGISTRY[model_key]))
+        return _bert_model_cache[model_key]
+
+    # Eagerly load the default model at startup so the first request isn't
+    # slowed down by an on-demand load. Non-default models are loaded lazily,
+    # the first time a request asks for them.
+    kw_model = get_bert_model(DEFAULT_BERT_MODEL)
 
 # -------------------------------
 # LLM Setup: Ollama
@@ -198,10 +239,15 @@ def _extract_keywords_via_ollama(document: str) -> list:
     keywords = parsed.get("keywords", []) if isinstance(parsed, dict) else []
     return [str(kw).strip() for kw in keywords if str(kw).strip()]
 
-def _extract_keyword_list(document: str) -> list:
-    """Extract a flat list of candidate keywords using the active backend."""
-    if EXTRACTION_BACKEND == "pubmedbert":
-        keyword_scores = kw_model.extract_keywords(
+def _extract_keyword_list(document: str, bert_model: Optional[str] = None) -> list:
+    """Extract a flat list of candidate keywords using the active backend.
+
+    bert_model selects a specific BERT_MODEL_REGISTRY entry for the "bert"
+    backend; it's ignored (and meaningless) for "ollama".
+    """
+    if EXTRACTION_BACKEND == "bert":
+        model = get_bert_model(bert_model or DEFAULT_BERT_MODEL)
+        keyword_scores = model.extract_keywords(
             document,
             keyphrase_ngram_range=(1, 1),
             stop_words='english',
@@ -218,6 +264,7 @@ class DocumentRequest(BaseModel):
     document: str
     ontology: Optional[str] = None
     ontology_collection: Optional[str] = None
+    model: Optional[str] = None
 
 # -------------------------------
 # Endpoint
@@ -227,7 +274,25 @@ async def extract_iris(req: DocumentRequest) -> Dict[str, Optional[Dict]]:
     try:
         print(f"Received request: {req}")
 
-        keyword_list = _extract_keyword_list(req.document)
+        if req.model:
+            if EXTRACTION_BACKEND != "bert":
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"'model' is only supported when EXTRACTION_BACKEND=bert "
+                        f"(current backend: '{EXTRACTION_BACKEND}')."
+                    ),
+                )
+            if req.model not in BERT_MODEL_REGISTRY:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Unknown BERT model '{req.model}'. "
+                        f"Must be one of: {', '.join(sorted(BERT_MODEL_REGISTRY))}."
+                    ),
+                )
+
+        keyword_list = _extract_keyword_list(req.document, req.model)
         print(f"Extracted keywords: {keyword_list}")
 
         ontology = req.ontology
@@ -242,9 +307,33 @@ async def extract_iris(req: DocumentRequest) -> Dict[str, Optional[Dict]]:
 
         return dict(zip(keyword_list, results))
 
+    except HTTPException:
+        raise
     except Exception as e:
         print("Unhandled error:", e)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/models")
+async def list_models():
+    """List the BERT models available for /extract-iris's `model` parameter.
+
+    Only meaningful when EXTRACTION_BACKEND=bert; returned regardless so
+    clients can discover what switching backends would offer.
+    """
+    return {
+        "backend": EXTRACTION_BACKEND,
+        "default_model": DEFAULT_BERT_MODEL,
+        "models": [
+            {
+                "name": name,
+                "hf_model": hf_id,
+                "default": name == DEFAULT_BERT_MODEL,
+                "loaded": name in _bert_model_cache,
+            }
+            for name, hf_id in sorted(BERT_MODEL_REGISTRY.items())
+        ],
+    }
 
 
 @app.get("/")
@@ -254,6 +343,7 @@ async def health_check():
         "status": "ok",
         "service": "radar keyword service",
         "backend": EXTRACTION_BACKEND,
+        "default_bert_model": DEFAULT_BERT_MODEL if EXTRACTION_BACKEND == "bert" else None,
         "message": "Service is online",
     }
 

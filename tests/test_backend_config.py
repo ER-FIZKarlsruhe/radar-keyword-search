@@ -14,8 +14,8 @@ def test_invalid_backend_raises_at_import_time(load_backend):
         load_backend("bogus")
 
 
-def test_pubmedbert_backend_does_not_talk_to_ollama(load_backend):
-    mod = load_backend("pubmedbert")
+def test_bert_backend_does_not_talk_to_ollama(load_backend):
+    mod = load_backend("bert")
 
     assert mod.kw_model is not None
     assert mod.llm_client is None

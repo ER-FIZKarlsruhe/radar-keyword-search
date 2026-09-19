@@ -27,7 +27,8 @@ def test_health_check_reports_the_active_backend():
     assert response.json() == {
         "status": "ok",
         "service": "radar keyword service",
-        "backend": "pubmedbert",
+        "backend": "bert",
+        "default_bert_model": "pubmedbert",
         "message": "Service is online",
     }
 

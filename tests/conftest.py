@@ -1,7 +1,7 @@
 """
 Shared test setup.
 
-iri_api.py picks its extraction backend (pubmedbert / ollama) from
+iri_api.py picks its extraction backend (bert / ollama) from
 the EXTRACTION_BACKEND env var *at import time*, and loads a real PubMedBERT
 model or a real OpenAI client accordingly. None of that is desirable in a
 test run: we don't want tests to require a GPU, download a model, need
@@ -29,7 +29,7 @@ import pytest
 for _module_name in ("torch", "transformers", "keybert", "openai", "numpy"):
     sys.modules[_module_name] = MagicMock()
 
-os.environ.setdefault("EXTRACTION_BACKEND", "pubmedbert")
+os.environ.setdefault("EXTRACTION_BACKEND", "bert")
 
 import iri_api  # noqa: E402  (must be imported after the stubs above)
 
@@ -40,10 +40,13 @@ def load_backend(monkeypatch):
 
     Usage: `mod = load_backend("ollama", OLLAMA_MODEL="mistral")`
     """
+    extra_keys = set()
+
     def _load(backend, **env):
         monkeypatch.setenv("EXTRACTION_BACKEND", backend)
         for key, value in env.items():
             monkeypatch.setenv(key, value)
+            extra_keys.add(key)
         importlib.reload(iri_api)
         # MagicMock memoizes call_args/return_value/side_effect on the
         # stubbed keybert/openai modules, so the "new" kw_model/llm_client
@@ -57,9 +60,15 @@ def load_backend(monkeypatch):
 
     yield _load
 
-    # Restore the default pubmedbert backend so tests that don't use this
-    # fixture always see a known, predictable module state.
-    monkeypatch.setenv("EXTRACTION_BACKEND", "pubmedbert")
+    # Clear any extra env vars a test passed in before restoring the default
+    # bert backend: monkeypatch only undoes them once this fixture (and this
+    # reload) has finished, so a value that fails module-level validation
+    # (e.g. an invalid BERT_MODEL) would otherwise still be set here and
+    # break this restoring reload too, leaving iri_api broken for every test
+    # that runs after this one.
+    for key in extra_keys:
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("EXTRACTION_BACKEND", "bert")
     importlib.reload(iri_api)
 
 
