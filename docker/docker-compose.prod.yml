@@ -1,0 +1,27 @@
+# Production deployment that reuses an Ollama server already running on the host
+# (e.g. the local-ai-dev / Open WebUI stack) instead of starting a second one.
+#
+# `ollama-net` must point at the Docker network that Ollama's container is
+# already on - Compose's default network name is `<project-dir-name>_default`,
+# so if that stack lives in a directory called `local-ai-dev`, the network is
+# `local-ai-dev_default`. Verify with:
+#   docker inspect <ollama-container-name> --format '{{json .NetworkSettings.Networks}}'
+
+services:
+  radar-keyword-search:
+    image: docker.dev.fiz-karlsruhe.de/radar-keyword-search:0.1
+    container_name: radar-keyword-search
+    restart: unless-stopped
+    networks:
+      - ollama-net
+    ports:
+      - "8001:8000"
+    environment:
+      EXTRACTION_BACKEND: ollama
+      OLLAMA_BASE_URL: http://ollama_local_ai:11434/v1
+      OLLAMA_MODEL: llama3
+
+networks:
+  ollama-net:
+    external: true
+    name: local-ai-dev_default

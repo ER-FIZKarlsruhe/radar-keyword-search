@@ -107,6 +107,20 @@ docker run -d --name radar-keyword-search \
 
 The active backend is reported by the `/` health check endpoint.
 
+### 3a. Reusing an Existing Ollama Server (docker-compose)
+
+If Ollama is already running on the host as its own container (e.g. as part of an Open WebUI
+stack), don't start a second one — join the existing Docker network instead and let
+`radar-keyword-search` reach it by container name. `docker/docker-compose.prod.yml` does this:
+
+```bash
+docker compose -f docker/docker-compose.prod.yml up -d
+```
+
+Edit the `OLLAMA_BASE_URL`/`OLLAMA_MODEL` environment values and the `networks.ollama-net.name` in
+that file to match your host's actual Ollama container name/network — see the comment at the top
+of the file for how to find it.
+
 ### 4. Building the Image Yourself
 
 The image is built from `docker/dockerfile` (multi-stage: CPU-only PyTorch wheels, no CUDA stack,
