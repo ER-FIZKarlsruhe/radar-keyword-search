@@ -5,7 +5,7 @@ Unlike tests/test_endpoints.py (which fakes search_tib_best_match so the fast
 suite never needs network access), this sends actual requests to the real
 https://api.terminology.tib.eu API and does a real HEAD request against the
 IRI it returns. It needs network access to both of those, so - like the
-Ollama backend test in this directory - it's kept out of the default `pytest`
+keyllm backend test in this directory - it's kept out of the default `pytest`
 run (see pytest.ini's `testpaths = tests`).
 
 Keyword extraction itself is faked, and the ML packages it would normally
@@ -14,7 +14,7 @@ tests/conftest.py does for the fast suite - this test is about the TIB
 lookup pipeline (which only depends on httpx), not about any particular
 extraction backend, so it doesn't need the real ML stack installed at all.
 The stubs are swapped back out afterwards so they don't leak into
-test_ollama_backend.py, which needs the real packages.
+test_keyllm_backend.py, which needs the real packages.
 """
 import importlib
 import sys
@@ -28,7 +28,7 @@ _STUBBED_MODULES = ("torch", "transformers", "keybert", "openai")
 
 @pytest.fixture
 def real_tib_backend(monkeypatch):
-    # The "ollama" backend is used purely as a lightweight way to get a
+    # The "keyllm" backend is used purely as a lightweight way to get a
     # module state whose keyword extraction is easy to fake (see below) - by
     # monkeypatching _extract_keyword_list directly, the OpenAI client is
     # constructed but never actually called, so no Ollama server needs to be
@@ -37,7 +37,7 @@ def real_tib_backend(monkeypatch):
     for name in _STUBBED_MODULES:
         sys.modules[name] = MagicMock()
 
-    monkeypatch.setenv("EXTRACTION_BACKEND", "ollama")
+    monkeypatch.setenv("EXTRACTION_BACKEND", "keyllm")
 
     import iri_api
 
@@ -47,9 +47,9 @@ def real_tib_backend(monkeypatch):
     finally:
         # Restore whatever was really in sys.modules (or lack thereof) for
         # these names, so a later test in the same session - e.g.
-        # test_ollama_backend.py's real Ollama/keybert/openai usage - never
+        # test_keyllm_backend.py's real Ollama/keybert/openai usage - never
         # sees our stand-ins. Deliberately doesn't reload iri_api back to
-        # pubmedbert here: in the real integration environment that would
+        # keybert here: in the real integration environment that would
         # trigger a genuine PubMedBERT download, and no other test in this
         # package depends on iri_api's module-level state afterwards.
         for name, original in original_modules.items():

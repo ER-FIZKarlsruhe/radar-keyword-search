@@ -13,7 +13,7 @@ def test_list_models_reports_the_full_registry_and_default():
 
     assert response.status_code == 200
     body = response.json()
-    assert body["backend"] == "bert"
+    assert body["backend"] == "keybert"
     assert body["default_model"] == "pubmedbert"
 
     names = {m["name"] for m in body["models"]}
@@ -40,8 +40,8 @@ def test_extract_iris_rejects_an_unknown_model():
     assert "Unknown BERT model" in response.json()["detail"]
 
 
-def test_extract_iris_rejects_a_model_param_when_backend_is_ollama(load_backend):
-    mod = load_backend("ollama")
+def test_extract_iris_rejects_a_model_param_when_backend_is_keyllm(load_backend):
+    mod = load_backend("keyllm")
 
     with _client(mod) as client:
         response = client.post(
@@ -50,7 +50,7 @@ def test_extract_iris_rejects_a_model_param_when_backend_is_ollama(load_backend)
         )
 
     assert response.status_code == 400
-    assert "EXTRACTION_BACKEND=bert" in response.json()["detail"]
+    assert "EXTRACTION_BACKEND=keybert" in response.json()["detail"]
 
 
 def test_extract_iris_loads_a_non_default_model_only_once(monkeypatch):
@@ -79,4 +79,4 @@ def test_invalid_default_bert_model_raises_at_import_time(load_backend):
     import pytest
 
     with pytest.raises(RuntimeError, match="Invalid BERT_MODEL"):
-        load_backend("bert", BERT_MODEL="not-a-real-model")
+        load_backend("keybert", BERT_MODEL="not-a-real-model")

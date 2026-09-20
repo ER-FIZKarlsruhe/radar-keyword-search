@@ -1,5 +1,5 @@
 """
-End-to-end test of the Ollama backend against a REAL Ollama server.
+End-to-end test of the keyllm backend against a REAL Ollama server.
 
 Points iri_api at a real Ollama server and sends a real request through the
 FastAPI app. This is slow (pulls a container image and a model on first run,
@@ -13,7 +13,7 @@ Run locally (starts and tears down its own Ollama container via testcontainers):
 
 Run via ../runIntegrationTestsDocker.sh (used by Bamboo): that script starts
 the Ollama server itself and pulls the model into it, then sets
-OLLAMA_BASE_URL before running pytest - see the ollama_backend fixture below.
+OLLAMA_BASE_URL before running pytest - see the keyllm_backend fixture below.
 """
 import importlib
 import os
@@ -39,7 +39,7 @@ OLLAMA_MODEL_CACHE_DIR = Path(
 
 
 @pytest.fixture(scope="module")
-def ollama_backend():
+def keyllm_backend():
     # runIntegrationTestsDocker.sh starts its own Ollama server directly (as
     # a sibling container on the host, not via testcontainers) and pulls the
     # model into it *before* this test container even starts, then points
@@ -48,7 +48,7 @@ def ollama_backend():
     # container started through the raw Docker Engine API. When that's
     # already been done, just use it instead of starting a second server.
     if os.environ.get("OLLAMA_BASE_URL"):
-        os.environ.setdefault("EXTRACTION_BACKEND", "ollama")
+        os.environ.setdefault("EXTRACTION_BACKEND", "keyllm")
         os.environ.setdefault("OLLAMA_MODEL", MODEL_NAME)
 
         import iri_api
@@ -101,7 +101,7 @@ def ollama_backend():
                 f"--- ollama server stderr ---\n{stderr.decode(errors='replace')}"
             )
 
-        os.environ["EXTRACTION_BACKEND"] = "ollama"
+        os.environ["EXTRACTION_BACKEND"] = "keyllm"
         os.environ["OLLAMA_BASE_URL"] = f"{ollama.get_endpoint()}/v1"
         os.environ["OLLAMA_MODEL"] = MODEL_NAME
 
@@ -111,7 +111,7 @@ def ollama_backend():
         yield iri_api
 
 
-def test_ollama_backend_extracts_keywords_from_a_real_server(ollama_backend, monkeypatch):
+def test_keyllm_backend_extracts_keywords_from_a_real_server(keyllm_backend, monkeypatch):
     # Keep this test focused on the Ollama wiring; don't depend on the real
     # TIB Terminology API being reachable/stable in CI.
     async def fake_search(keyword, ontology, ontology_collection, threshold, client):
@@ -123,9 +123,9 @@ def test_ollama_backend_extracts_keywords_from_a_real_server(ollama_backend, mon
             "ontology_name": "test",
         }
 
-    monkeypatch.setattr(ollama_backend, "search_tib_best_match", fake_search)
+    monkeypatch.setattr(keyllm_backend, "search_tib_best_match", fake_search)
 
-    with TestClient(ollama_backend.app) as client:
+    with TestClient(keyllm_backend.app) as client:
         response = client.post(
             "/extract-iris",
             json={"document": "Insulin regulates blood glucose levels in patients with diabetes mellitus."},

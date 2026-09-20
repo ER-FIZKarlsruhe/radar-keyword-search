@@ -27,7 +27,7 @@ def test_health_check_reports_the_active_backend():
     assert response.json() == {
         "status": "ok",
         "service": "radar keyword service",
-        "backend": "bert",
+        "backend": "keybert",
         "default_bert_model": "pubmedbert",
         "message": "Service is online",
     }
@@ -61,8 +61,8 @@ def test_extract_iris_returns_500_when_keyword_extraction_fails():
     assert "model exploded" in response.json()["detail"]
 
 
-def test_extract_iris_via_ollama_backend_filters_blank_keywords(load_backend, monkeypatch):
-    mod = load_backend("ollama")
+def test_extract_iris_via_keyllm_backend_filters_blank_keywords(load_backend, monkeypatch):
+    mod = load_backend("keyllm")
     # The LLM can return blank/whitespace-only entries; those must be
     # filtered out and never sent to the TIB search.
     mod.llm_client.chat.completions.create.return_value = _fake_chat_completion(
@@ -94,8 +94,8 @@ def test_extract_iris_via_ollama_backend_filters_blank_keywords(load_backend, mo
     ]
 
 
-def test_extract_iris_via_ollama_backend_returns_a_match_per_extracted_keyword(load_backend, monkeypatch):
-    mod = load_backend("ollama")
+def test_extract_iris_via_keyllm_backend_returns_a_match_per_extracted_keyword(load_backend, monkeypatch):
+    mod = load_backend("keyllm")
     mod.llm_client.chat.completions.create.return_value = _fake_chat_completion('{"keywords": ["insulin"]}')
 
     async def fake_search(keyword, ontology, ontology_collection, threshold, client):
@@ -110,8 +110,8 @@ def test_extract_iris_via_ollama_backend_returns_a_match_per_extracted_keyword(l
     assert response.json() == {"insulin": {"iri": "https://example.org/insulin"}}
 
 
-def test_extract_iris_via_ollama_backend_requests_json_output(load_backend):
-    mod = load_backend("ollama")
+def test_extract_iris_via_keyllm_backend_requests_json_output(load_backend):
+    mod = load_backend("keyllm")
     mod.llm_client.chat.completions.create.return_value = _fake_chat_completion('{"keywords": []}')
 
     with _client(mod) as client:
@@ -121,8 +121,8 @@ def test_extract_iris_via_ollama_backend_requests_json_output(load_backend):
     assert kwargs["response_format"] == {"type": "json_object"}
 
 
-def test_extract_iris_via_ollama_backend_returns_500_when_extraction_fails(load_backend):
-    mod = load_backend("ollama")
+def test_extract_iris_via_keyllm_backend_returns_500_when_extraction_fails(load_backend):
+    mod = load_backend("keyllm")
 
     def boom(*args, **kwargs):
         raise RuntimeError("llm exploded")
@@ -136,11 +136,11 @@ def test_extract_iris_via_ollama_backend_returns_500_when_extraction_fails(load_
     assert "llm exploded" in response.json()["detail"]
 
 
-def test_extract_iris_via_ollama_backend_returns_500_when_the_reply_is_not_valid_json(load_backend):
+def test_extract_iris_via_keyllm_backend_returns_500_when_the_reply_is_not_valid_json(load_backend):
     # response_format={"type": "json_object"} makes this vanishingly unlikely with a
     # real Ollama server, but the failure mode should still be an honest 500 rather
     # than an unrelated crash further down the pipeline if it ever happens.
-    mod = load_backend("ollama")
+    mod = load_backend("keyllm")
     mod.llm_client.chat.completions.create.return_value = _fake_chat_completion("not json")
 
     with _client(mod) as client:
@@ -149,8 +149,8 @@ def test_extract_iris_via_ollama_backend_returns_500_when_the_reply_is_not_valid
     assert response.status_code == 500
 
 
-def test_extract_iris_via_ollama_backend_handles_no_keywords_found(load_backend):
-    mod = load_backend("ollama")
+def test_extract_iris_via_keyllm_backend_handles_no_keywords_found(load_backend):
+    mod = load_backend("keyllm")
     mod.llm_client.chat.completions.create.return_value = _fake_chat_completion('{"keywords": []}')
 
     with _client(mod) as client:

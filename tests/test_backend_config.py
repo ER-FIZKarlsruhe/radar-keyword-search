@@ -14,15 +14,15 @@ def test_invalid_backend_raises_at_import_time(load_backend):
         load_backend("bogus")
 
 
-def test_bert_backend_does_not_talk_to_ollama(load_backend):
-    mod = load_backend("bert")
+def test_keybert_backend_does_not_talk_to_ollama(load_backend):
+    mod = load_backend("keybert")
 
     assert mod.kw_model is not None
     assert mod.llm_client is None
 
 
-def test_ollama_backend_uses_local_endpoint_by_default(load_backend):
-    mod = load_backend("ollama")
+def test_keyllm_backend_uses_local_endpoint_by_default(load_backend):
+    mod = load_backend("keyllm")
 
     assert mod.kw_model is None
     assert mod.llm_client is not None
@@ -32,7 +32,7 @@ def test_ollama_backend_uses_local_endpoint_by_default(load_backend):
     assert client_kwargs["base_url"] == "http://localhost:11434/v1"
 
 
-def test_ollama_backend_requests_structured_json_output(load_backend):
+def test_keyllm_backend_requests_structured_json_output(load_backend):
     # A chat model can ignore an informal "respond with ONLY the keywords,
     # separated by commas" instruction and answer conversationally instead
     # (e.g. "Here are the extracted keywords: cell"). response_format=
@@ -40,7 +40,7 @@ def test_ollama_backend_requests_structured_json_output(load_backend):
     # grammar-constrained decoding, so there's no free-form prose for a
     # lead-in/sign-off sentence to leak through - see
     # _extract_keywords_via_ollama.
-    mod = load_backend("ollama")
+    mod = load_backend("keyllm")
     mod.llm_client.chat.completions.create.return_value = _fake_chat_completion('{"keywords": []}')
 
     mod._extract_keywords_via_ollama("some document")
@@ -51,9 +51,9 @@ def test_ollama_backend_requests_structured_json_output(load_backend):
     assert "keywords" in mod.OLLAMA_KEYWORD_EXTRACTION_SYSTEM_PROMPT.lower()
 
 
-def test_ollama_base_url_and_model_are_overridable(load_backend):
+def test_keyllm_base_url_and_model_are_overridable(load_backend):
     mod = load_backend(
-        "ollama",
+        "keyllm",
         OLLAMA_BASE_URL="http://gpu-box:11434/v1",
         OLLAMA_MODEL="mistral",
     )
@@ -63,7 +63,7 @@ def test_ollama_base_url_and_model_are_overridable(load_backend):
     assert mod.llm_model == "mistral"
 
 
-def test_ollama_backend_bypasses_the_system_proxy_by_default(load_backend, monkeypatch):
+def test_keyllm_backend_bypasses_the_system_proxy_by_default(load_backend, monkeypatch):
     monkeypatch.delenv("OLLAMA_HTTP_PROXY", raising=False)
     captured_kwargs = {}
 
@@ -73,12 +73,12 @@ def test_ollama_backend_bypasses_the_system_proxy_by_default(load_backend, monke
 
     monkeypatch.setattr("httpx.Client", FakeHttpxClient)
 
-    load_backend("ollama")
+    load_backend("keyllm")
 
     assert captured_kwargs == {"trust_env": False}
 
 
-def test_ollama_backend_uses_an_explicit_proxy_when_configured(load_backend, monkeypatch):
+def test_keyllm_backend_uses_an_explicit_proxy_when_configured(load_backend, monkeypatch):
     captured_kwargs = {}
 
     class FakeHttpxClient:
@@ -87,6 +87,6 @@ def test_ollama_backend_uses_an_explicit_proxy_when_configured(load_backend, mon
 
     monkeypatch.setattr("httpx.Client", FakeHttpxClient)
 
-    load_backend("ollama", OLLAMA_HTTP_PROXY="http://proxy.example.com:8080")
+    load_backend("keyllm", OLLAMA_HTTP_PROXY="http://proxy.example.com:8080")
 
     assert captured_kwargs == {"proxy": "http://proxy.example.com:8080"}

@@ -15,12 +15,12 @@ app = FastAPI()
 # Backend selection
 # -------------------------------
 # EXTRACTION_BACKEND picks which keyword-extraction model this server instance
-# uses. Only that backend's dependencies are loaded, so choosing "ollama"
-# never downloads a BERT model, and choosing "bert" never requires an Ollama
-# server. Which specific BERT model "bert" serves is a separate, per-request
-# choice - see BERT_MODEL_REGISTRY below.
-VALID_BACKENDS = {"bert", "ollama"}
-EXTRACTION_BACKEND = os.getenv("EXTRACTION_BACKEND", "bert").strip().lower()
+# uses. Only that backend's dependencies are loaded, so choosing "keyllm"
+# never downloads a BERT model, and choosing "keybert" never requires an
+# Ollama server. Which specific BERT model "keybert" serves is a separate,
+# per-request choice - see BERT_MODEL_REGISTRY below.
+VALID_BACKENDS = {"keybert", "keyllm"}
+EXTRACTION_BACKEND = os.getenv("EXTRACTION_BACKEND", "keybert").strip().lower()
 if EXTRACTION_BACKEND not in VALID_BACKENDS:
     raise RuntimeError(
         f"Invalid EXTRACTION_BACKEND '{EXTRACTION_BACKEND}'. "
@@ -34,7 +34,7 @@ llm_model = None
 # -------------------------------
 # BERT model registry
 # -------------------------------
-# Alternative embedding models the "bert" backend can serve, selectable
+# Alternative embedding models the "keybert" backend can serve, selectable
 # per-request via DocumentRequest.model. They're all BERT-family encoders
 # loaded through the same AutoTokenizer/AutoModel + mean-pooling path, so
 # adding a new one only means adding an entry here.
@@ -59,7 +59,7 @@ _bert_model_cache: Dict[str, object] = {}
 # -------------------------------
 # BERT Setup (CPU only)
 # -------------------------------
-if EXTRACTION_BACKEND == "bert":
+if EXTRACTION_BACKEND == "keybert":
     from transformers import AutoTokenizer, AutoModel
     from keybert import KeyBERT
     import torch
@@ -113,7 +113,7 @@ if EXTRACTION_BACKEND == "bert":
 # JSON via grammar-constrained decoding, so there's no free-form prose left
 # for a leak to hide in, and parsing it doesn't depend on the model
 # following an informal "separated by commas" instruction at all.
-elif EXTRACTION_BACKEND == "ollama":
+elif EXTRACTION_BACKEND == "keyllm":
     import openai
 
     OLLAMA_KEYWORD_EXTRACTION_SYSTEM_PROMPT = (
@@ -242,10 +242,10 @@ def _extract_keywords_via_ollama(document: str) -> list:
 def _extract_keyword_list(document: str, bert_model: Optional[str] = None) -> list:
     """Extract a flat list of candidate keywords using the active backend.
 
-    bert_model selects a specific BERT_MODEL_REGISTRY entry for the "bert"
-    backend; it's ignored (and meaningless) for "ollama".
+    bert_model selects a specific BERT_MODEL_REGISTRY entry for the "keybert"
+    backend; it's ignored (and meaningless) for "keyllm".
     """
-    if EXTRACTION_BACKEND == "bert":
+    if EXTRACTION_BACKEND == "keybert":
         model = get_bert_model(bert_model or DEFAULT_BERT_MODEL)
         keyword_scores = model.extract_keywords(
             document,
@@ -275,11 +275,11 @@ async def extract_iris(req: DocumentRequest) -> Dict[str, Optional[Dict]]:
         print(f"Received request: {req}")
 
         if req.model:
-            if EXTRACTION_BACKEND != "bert":
+            if EXTRACTION_BACKEND != "keybert":
                 raise HTTPException(
                     status_code=400,
                     detail=(
-                        f"'model' is only supported when EXTRACTION_BACKEND=bert "
+                        f"'model' is only supported when EXTRACTION_BACKEND=keybert "
                         f"(current backend: '{EXTRACTION_BACKEND}')."
                     ),
                 )
@@ -318,7 +318,7 @@ async def extract_iris(req: DocumentRequest) -> Dict[str, Optional[Dict]]:
 async def list_models():
     """List the BERT models available for /extract-iris's `model` parameter.
 
-    Only meaningful when EXTRACTION_BACKEND=bert; returned regardless so
+    Only meaningful when EXTRACTION_BACKEND=keybert; returned regardless so
     clients can discover what switching backends would offer.
     """
     return {
@@ -343,7 +343,7 @@ async def health_check():
         "status": "ok",
         "service": "radar keyword service",
         "backend": EXTRACTION_BACKEND,
-        "default_bert_model": DEFAULT_BERT_MODEL if EXTRACTION_BACKEND == "bert" else None,
+        "default_bert_model": DEFAULT_BERT_MODEL if EXTRACTION_BACKEND == "keybert" else None,
         "message": "Service is online",
     }
 

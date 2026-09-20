@@ -104,7 +104,7 @@ mkdir -p test-results
 
 docker run --rm \
   --network "$NETWORK_NAME" \
-  -e EXTRACTION_BACKEND=ollama \
+  -e EXTRACTION_BACKEND=keyllm \
   -e "OLLAMA_BASE_URL=http://${OLLAMA_CONTAINER_NAME}:11434/v1" \
   -e OLLAMA_MODEL="$MODEL_NAME" \
   -v "$(pwd)/test-results:/app/test-results" \

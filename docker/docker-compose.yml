@@ -17,7 +17,7 @@ services:
     ports:
       - "8000:8000"
     environment:
-      EXTRACTION_BACKEND: ollama
+      EXTRACTION_BACKEND: keyllm
       OLLAMA_BASE_URL: http://ollama:11434/v1
       OLLAMA_MODEL: llama3
     depends_on:
