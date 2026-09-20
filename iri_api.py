@@ -1,5 +1,5 @@
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Dict, Optional
 import uvicorn
 import asyncio
@@ -125,7 +125,7 @@ elif EXTRACTION_BACKEND == "keyllm":
     OLLAMA_KEYWORD_EXTRACTION_PROMPT = """I have the following document:
 [DOCUMENT]
 
-Extract the keywords that best describe the topic of the text.
+Extract at most [MAX_KEYWORDS] keywords that best describe the topic of the text.
 Respond with a JSON object of the exact shape {"keywords": ["keyword1", "keyword2", ...]}."""
 
     base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
@@ -217,7 +217,9 @@ async def search_tib_best_match(keyword: str, ontology: Optional[str],  ontology
         return best_match
     return None
 
-def _extract_keywords_via_ollama(document: str) -> list:
+DEFAULT_MAX_KEYWORDS = 10
+
+def _extract_keywords_via_ollama(document: str, max_keywords: int = DEFAULT_MAX_KEYWORDS) -> list:
     """Extract keywords from the configured Ollama chat model as a JSON array.
 
     Calls the OpenAI-compatible client directly with
@@ -225,8 +227,14 @@ def _extract_keywords_via_ollama(document: str) -> list:
     KeyBERT's KeyLLM (see the module-level comment above the Ollama setup for
     why): the model can't leak conversational prose through the result
     because it's constrained to emit valid JSON in the first place.
+
+    max_keywords is only a best-effort instruction to the chat model (unlike
+    KeyBERT's top_n, nothing here can force an exact count), so the result is
+    still truncated afterwards to honour the caller's limit.
     """
-    prompt = OLLAMA_KEYWORD_EXTRACTION_PROMPT.replace("[DOCUMENT]", document)
+    prompt = OLLAMA_KEYWORD_EXTRACTION_PROMPT.replace("[DOCUMENT]", document).replace(
+        "[MAX_KEYWORDS]", str(max_keywords)
+    )
     response = llm_client.chat.completions.create(
         model=llm_model,
         messages=[
@@ -237,13 +245,15 @@ def _extract_keywords_via_ollama(document: str) -> list:
     )
     parsed = json.loads(response.choices[0].message.content)
     keywords = parsed.get("keywords", []) if isinstance(parsed, dict) else []
-    return [str(kw).strip() for kw in keywords if str(kw).strip()]
+    return [str(kw).strip() for kw in keywords if str(kw).strip()][:max_keywords]
 
-def _extract_keyword_list(document: str, bert_model: Optional[str] = None) -> list:
+def _extract_keyword_list(document: str, bert_model: Optional[str] = None, max_keywords: int = DEFAULT_MAX_KEYWORDS) -> list:
     """Extract a flat list of candidate keywords using the active backend.
 
     bert_model selects a specific BERT_MODEL_REGISTRY entry for the "keybert"
-    backend; it's ignored (and meaningless) for "keyllm".
+    backend; it's ignored (and meaningless) for "keyllm". max_keywords caps how
+    many keywords are returned; there may be fewer if the document doesn't
+    yield that many candidates.
     """
     if EXTRACTION_BACKEND == "keybert":
         model = get_bert_model(bert_model or DEFAULT_BERT_MODEL)
@@ -251,11 +261,11 @@ def _extract_keyword_list(document: str, bert_model: Optional[str] = None) -> li
             document,
             keyphrase_ngram_range=(1, 1),
             stop_words='english',
-            top_n=10
+            top_n=max_keywords
         )
         return [kw for kw, _ in keyword_scores]
 
-    return _extract_keywords_via_ollama(document)
+    return _extract_keywords_via_ollama(document, max_keywords)
 
 # -------------------------------
 # Request Schema
@@ -265,6 +275,7 @@ class DocumentRequest(BaseModel):
     ontology: Optional[str] = None
     ontology_collection: Optional[str] = None
     model: Optional[str] = None
+    max_keywords: Optional[int] = Field(default=None, ge=1, le=20)
 
 # -------------------------------
 # Endpoint
@@ -292,7 +303,7 @@ async def extract_iris(req: DocumentRequest) -> Dict[str, Optional[Dict]]:
                     ),
                 )
 
-        keyword_list = _extract_keyword_list(req.document, req.model)
+        keyword_list = _extract_keyword_list(req.document, req.model, req.max_keywords or DEFAULT_MAX_KEYWORDS)
         print(f"Extracted keywords: {keyword_list}")
 
         ontology = req.ontology
