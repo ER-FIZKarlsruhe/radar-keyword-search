@@ -60,7 +60,7 @@ def real_tib_backend(monkeypatch):
 
 
 def test_extract_iris_resolves_real_chebi_matches_via_the_tib_service(real_tib_backend, monkeypatch):
-    monkeypatch.setattr(real_tib_backend, "_extract_keyword_list", lambda document, bert_model=None: ["insulin", "glucose"])
+    monkeypatch.setattr(real_tib_backend, "_extract_keyword_list", lambda document, bert_model=None, max_keywords=None: ["insulin", "glucose"])
 
     with TestClient(real_tib_backend.app) as client:
         response = client.post(
@@ -87,7 +87,7 @@ def test_extract_iris_resolves_real_matches_scoped_to_a_collection(real_tib_back
     # uppercase collection id, so this exercises the case-normalization in
     # search_tib_best_match end-to-end against the real service, not just the URL
     # string built in the unit tests.
-    monkeypatch.setattr(real_tib_backend, "_extract_keyword_list", lambda document, bert_model=None: ["apoptosis"])
+    monkeypatch.setattr(real_tib_backend, "_extract_keyword_list", lambda document, bert_model=None, max_keywords=None: ["apoptosis"])
 
     with TestClient(real_tib_backend.app) as client:
         response = client.post(
