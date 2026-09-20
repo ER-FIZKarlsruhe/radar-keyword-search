@@ -30,23 +30,26 @@ async def test_returns_best_match_within_threshold():
         "best_term": "insulin",
         "distance": 0,
         "ontology_name": "chebi",
+        "matched": True,
     }
 
 
-async def test_returns_none_when_distance_exceeds_threshold():
+async def test_marks_unmatched_when_distance_exceeds_threshold():
     docs = [{"iri": "https://example.org/x", "label": "completely different term"}]
     async with _client(docs) as client:
         result = await search_tib_best_match("insulin", None, None, threshold=2, client=client)
 
-    assert result is None
+    assert result["matched"] is False
+    assert result["iri"] == "https://example.org/x"
 
 
-async def test_skips_docs_whose_iri_is_unreachable():
+async def test_marks_unmatched_when_the_best_candidates_iri_is_unreachable():
     docs = [{"iri": "https://example.org/insulin", "label": "insulin"}]
     async with _client(docs, head_status=404) as client:
         result = await search_tib_best_match("insulin", None, None, threshold=5, client=client)
 
-    assert result is None
+    assert result["matched"] is False
+    assert result["iri"] == "https://example.org/insulin"
 
 
 async def test_returns_none_when_there_are_no_docs():

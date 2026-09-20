@@ -161,6 +161,14 @@ async def check_iri_exists(iri, client: httpx.AsyncClient) -> bool:
         return False
 
 async def search_tib_best_match(keyword: str, ontology: Optional[str],  ontology_collection: Optional[str], threshold: int, client: httpx.AsyncClient) -> Optional[Dict]:
+    """Find the TIB term closest to `keyword` and report how close it was.
+
+    Always returns the globally closest candidate (with its distance and a
+    `matched` flag for whether it cleared `threshold`) as long as at least one
+    candidate was found at all, so callers can show a match-quality rating
+    even for keywords that end up used as free text. Returns None only when
+    the TIB search itself failed or returned no candidates whatsoever.
+    """
     encoded_kw = quote(keyword)
     url = f"https://api.terminology.tib.eu/api/search?q={encoded_kw}"
     if ontology:
@@ -189,10 +197,14 @@ async def search_tib_best_match(keyword: str, ontology: Optional[str],  ontology
     best_match = None
     best_distance = float('inf')
 
+    # Textual closeness is ranked across every candidate term first, regardless of whether its
+    # IRI currently resolves - checking that per-candidate up front (as this used to do) meant a
+    # perfect (distance 0) label match got silently discarded whenever its IRI happened to be
+    # dead, even though the match quality itself had nothing to do with that.
     if "response" in data and "docs" in data["response"]:
         for doc in data["response"]["docs"]:
             iri = doc.get("iri")
-            if not iri or not await check_iri_exists(iri, client):
+            if not iri:
                 continue
 
             terms = []
@@ -213,9 +225,14 @@ async def search_tib_best_match(keyword: str, ontology: Optional[str],  ontology
                         "ontology_name": doc.get("ontology_name")
                     }
 
-    if best_match and best_match["distance"] <= threshold:
-        return best_match
-    return None
+    if not best_match:
+        return None
+
+    # Only the winning candidate's IRI needs a liveness check (also cheaper than checking every
+    # candidate up front, as before). A match can still be "matched" quality-wise while lacking a
+    # usable link, if that one IRI doesn't resolve.
+    best_match["matched"] = best_match["distance"] <= threshold and await check_iri_exists(best_match["iri"], client)
+    return best_match
 
 DEFAULT_MAX_KEYWORDS = 10
 
