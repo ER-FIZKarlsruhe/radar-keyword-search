@@ -21,7 +21,8 @@ def test_list_models_reports_the_full_registry_and_default():
 
     default_entry = next(m for m in body["models"] if m["name"] == "pubmedbert")
     assert default_entry["default"] is True
-    assert default_entry["hf_model"] == iri_api.BERT_MODEL_REGISTRY["pubmedbert"]
+    assert default_entry["hf_model"] == iri_api.BERT_MODEL_REGISTRY["pubmedbert"]["hf_model"]
+    assert default_entry["label"] == iri_api.BERT_MODEL_REGISTRY["pubmedbert"]["label"]
     # The default model is loaded eagerly at startup.
     assert default_entry["loaded"] is True
 

@@ -37,13 +37,29 @@ llm_model = None
 # Alternative embedding models the "keybert" backend can serve, selectable
 # per-request via DocumentRequest.model. They're all BERT-family encoders
 # loaded through the same AutoTokenizer/AutoModel + mean-pooling path, so
-# adding a new one only means adding an entry here.
+# adding a new one only means adding an entry here. "label" is the
+# user-facing name /models hands to the frontend's model dropdown.
 BERT_MODEL_REGISTRY = {
-    "pubmedbert": "microsoft/BiomedNLP-PubMedBERT-base-uncased-abstract-fulltext",
-    "pubmedbert-large": "microsoft/BiomedNLP-PubMedBERT-large-uncased-abstract",
-    "biobert": "dmis-lab/biobert-base-cased-v1.1",
-    "scibert": "allenai/scibert_scivocab_uncased",
-    "sapbert": "cambridgeltl/SapBERT-from-PubMedBERT-fulltext",
+    "pubmedbert": {
+        "hf_model": "microsoft/BiomedNLP-PubMedBERT-base-uncased-abstract-fulltext",
+        "label": "Medicine / health sciences",
+    },
+    "pubmedbert-large": {
+        "hf_model": "microsoft/BiomedNLP-PubMedBERT-large-uncased-abstract",
+        "label": "Medicine / health sciences (large model)",
+    },
+    "biobert": {
+        "hf_model": "dmis-lab/biobert-base-cased-v1.1",
+        "label": "Biomedicine / life sciences",
+    },
+    "scibert": {
+        "hf_model": "allenai/scibert_scivocab_uncased",
+        "label": "Scientific literature (biomedicine / computer science)",
+    },
+    "sapbert": {
+        "hf_model": "cambridgeltl/SapBERT-from-PubMedBERT-fulltext",
+        "label": "Medical terms and terminologies",
+    },
 }
 DEFAULT_BERT_MODEL = os.getenv("BERT_MODEL", "pubmedbert").strip().lower()
 if DEFAULT_BERT_MODEL not in BERT_MODEL_REGISTRY:
@@ -89,8 +105,9 @@ if EXTRACTION_BACKEND == "keybert":
                 f"Must be one of: {', '.join(sorted(BERT_MODEL_REGISTRY))}."
             )
         if model_key not in _bert_model_cache:
-            print(f"Loading BERT model '{model_key}' ({BERT_MODEL_REGISTRY[model_key]})...")
-            _bert_model_cache[model_key] = KeyBERT(model=_BertEmbedding(BERT_MODEL_REGISTRY[model_key]))
+            hf_model = BERT_MODEL_REGISTRY[model_key]["hf_model"]
+            print(f"Loading BERT model '{model_key}' ({hf_model})...")
+            _bert_model_cache[model_key] = KeyBERT(model=_BertEmbedding(hf_model))
         return _bert_model_cache[model_key]
 
     # Eagerly load the default model at startup so the first request isn't
@@ -355,11 +372,12 @@ async def list_models():
         "models": [
             {
                 "name": name,
-                "hf_model": hf_id,
+                "hf_model": entry["hf_model"],
+                "label": entry["label"],
                 "default": name == DEFAULT_BERT_MODEL,
                 "loaded": name in _bert_model_cache,
             }
-            for name, hf_id in sorted(BERT_MODEL_REGISTRY.items())
+            for name, entry in sorted(BERT_MODEL_REGISTRY.items())
         ],
     }
 
