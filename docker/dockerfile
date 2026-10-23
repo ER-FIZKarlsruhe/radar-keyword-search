@@ -27,7 +27,7 @@ WORKDIR /app
 COPY --from=builder /opt/venv /opt/venv
 ENV PATH="/opt/venv/bin:${PATH}"
 
-COPY iri_api.py .
+COPY iri_api.py bert_models.py ./
 
 RUN useradd --system --create-home appuser
 USER appuser

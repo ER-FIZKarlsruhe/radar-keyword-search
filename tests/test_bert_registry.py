@@ -30,6 +30,41 @@ def test_list_models_reports_the_full_registry_and_default():
     assert other_entry["default"] is False
 
 
+def test_list_models_reports_kind_languages_and_domains():
+    with _client() as client:
+        body = client.get("/models").json()
+
+    e5 = next(m for m in body["models"] if m["name"] == "multilingual-e5")
+    assert e5["kind"] == "sentence-embedding"
+    assert e5["languages"] == ["multilingual"]
+    assert "Interdisciplinary" in e5["domains"]
+
+
+def test_every_registry_entry_is_well_formed():
+    for name, entry in iri_api.BERT_MODEL_REGISTRY.items():
+        assert entry["kind"] in {"sentence-embedding", "masked-lm"}, name
+        assert entry["languages"], name
+        assert entry["domains"], name
+
+
+def test_every_domain_has_at_least_two_candidate_models():
+    models_per_domain = {}
+    for name, entry in iri_api.BERT_MODEL_REGISTRY.items():
+        for domain in entry["domains"]:
+            models_per_domain.setdefault(domain, set()).add(name)
+
+    thin = {d: m for d, m in models_per_domain.items() if len(m) < 2}
+    assert not thin
+
+
+def test_bert_embedding_prepends_the_registry_prefix():
+    embedding = iri_api._BertEmbedding("some/model", prefix="query: ")
+    embedding(["insulin"])
+
+    docs = embedding._tokenizer.call_args.args[0]
+    assert docs == ["query: insulin"]
+
+
 def test_extract_iris_rejects_an_unknown_model():
     with _client() as client:
         response = client.post(

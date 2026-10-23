@@ -9,6 +9,8 @@ import os
 
 from urllib.parse import quote
 
+from bert_models import BERT_MODEL_REGISTRY
+
 app = FastAPI()
 
 # -------------------------------
@@ -34,33 +36,8 @@ llm_model = None
 # -------------------------------
 # BERT model registry
 # -------------------------------
-# Alternative embedding models the "keybert" backend can serve, selectable
-# per-request via DocumentRequest.model. They're all BERT-family encoders
-# loaded through the same AutoTokenizer/AutoModel + mean-pooling path, so
-# adding a new one only means adding an entry here. "label" is the
-# user-facing name /models hands to the frontend's model dropdown.
-BERT_MODEL_REGISTRY = {
-    "pubmedbert": {
-        "hf_model": "microsoft/BiomedNLP-PubMedBERT-base-uncased-abstract-fulltext",
-        "label": "Medicine / health sciences",
-    },
-    "pubmedbert-large": {
-        "hf_model": "microsoft/BiomedNLP-PubMedBERT-large-uncased-abstract",
-        "label": "Medicine / health sciences (large model)",
-    },
-    "biobert": {
-        "hf_model": "dmis-lab/biobert-base-cased-v1.1",
-        "label": "Biomedicine / life sciences",
-    },
-    "scibert": {
-        "hf_model": "allenai/scibert_scivocab_uncased",
-        "label": "Scientific literature (biomedicine / computer science)",
-    },
-    "sapbert": {
-        "hf_model": "cambridgeltl/SapBERT-from-PubMedBERT-fulltext",
-        "label": "Medical terms and terminologies",
-    },
-}
+# Defined in bert_models.py; which specific model a request uses is selected
+# per-request via DocumentRequest.model.
 DEFAULT_BERT_MODEL = os.getenv("BERT_MODEL", "pubmedbert").strip().lower()
 if DEFAULT_BERT_MODEL not in BERT_MODEL_REGISTRY:
     raise RuntimeError(
@@ -86,11 +63,14 @@ if EXTRACTION_BACKEND == "keybert":
         return torch.sum(token_embeddings * input_mask_expanded, 1) / torch.clamp(input_mask_expanded.sum(1), min=1e-9)
 
     class _BertEmbedding:
-        def __init__(self, model_name: str):
+        def __init__(self, model_name: str, prefix: str = ""):
             self._tokenizer = AutoTokenizer.from_pretrained(model_name)
             self._model = AutoModel.from_pretrained(model_name)
+            self._prefix = prefix
 
         def __call__(self, docs, **kwargs):
+            if self._prefix:
+                docs = [self._prefix + doc for doc in docs]
             encoded_input = self._tokenizer(docs, padding=True, truncation=True, return_tensors='pt')
             with torch.no_grad():
                 model_output = self._model(**encoded_input)
@@ -105,9 +85,12 @@ if EXTRACTION_BACKEND == "keybert":
                 f"Must be one of: {', '.join(sorted(BERT_MODEL_REGISTRY))}."
             )
         if model_key not in _bert_model_cache:
-            hf_model = BERT_MODEL_REGISTRY[model_key]["hf_model"]
+            entry = BERT_MODEL_REGISTRY[model_key]
+            hf_model = entry["hf_model"]
             print(f"Loading BERT model '{model_key}' ({hf_model})...")
-            _bert_model_cache[model_key] = KeyBERT(model=_BertEmbedding(hf_model))
+            _bert_model_cache[model_key] = KeyBERT(
+                model=_BertEmbedding(hf_model, entry.get("prefix", ""))
+            )
         return _bert_model_cache[model_key]
 
     # Eagerly load the default model at startup so the first request isn't
@@ -374,6 +357,9 @@ async def list_models():
                 "name": name,
                 "hf_model": entry["hf_model"],
                 "label": entry["label"],
+                "kind": entry["kind"],
+                "languages": entry["languages"],
+                "domains": entry["domains"],
                 "default": name == DEFAULT_BERT_MODEL,
                 "loaded": name in _bert_model_cache,
             }
