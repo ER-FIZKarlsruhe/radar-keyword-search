@@ -1,5 +1,4 @@
-
-rd-search with TIB Terminology Service Support
+# radar-keyword-search with TIB Terminology Service Support
 
 This service provides keyword extraction from documents using one of two interchangeable backends — `keybert`, a custom PubMedBERT model (CPU only), or `keyllm`, a local Ollama model — followed by entity linking to the [TIB Terminology Service](https://api.terminology.tib.eu).
 
