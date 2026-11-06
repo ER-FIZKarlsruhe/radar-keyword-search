@@ -174,6 +174,49 @@ async def check_iri_exists(iri, client: httpx.AsyncClient) -> bool:
     except httpx.RequestError:
         return False
 
+TIB_COLLECTIONS_URL = "https://api.terminology.tib.eu/api/ontologies/schemavalues?schema=collection"
+
+# lowercase id -> TIB's exact id; None until fetched successfully once
+_tib_collection_ids: Optional[Dict[str, str]] = None
+
+
+async def _get_tib_collection_ids(client: httpx.AsyncClient) -> Dict[str, str]:
+    global _tib_collection_ids
+    if _tib_collection_ids is None:
+        try:
+            response = await client.get(TIB_COLLECTIONS_URL, timeout=10)
+            response.raise_for_status()
+            ids = response.json().get("content") or []
+            mapping = {i.lower(): i for i in ids if isinstance(i, str)}
+            # Only cache a real list, so a transient failure is retried on the next request
+            if mapping:
+                _tib_collection_ids = mapping
+            return mapping
+        except (httpx.HTTPError, ValueError):
+            return {}
+    return _tib_collection_ids
+
+
+async def resolve_collection_ids(ontology_collection: Optional[str], client: httpx.AsyncClient) -> Optional[str]:
+    """Map a (comma-separated) collection value to TIB's exact ids.
+
+    TIB's classification filter is case-sensitive and matches only the exact id,
+    which is often mixed case ("DataPLANT", "NFDI4Energy", "FAIR Data Spaces").
+    Any other casing silently matches nothing - and, with no `ontology` set,
+    the whole term lookup then returns zero candidates. So each id is looked up
+    case-insensitively in TIB's own collection list; an id TIB doesn't list (or
+    if the list can't be fetched) is uppercased, which is right for the common
+    all-uppercase ids like "NFDI4CHEM".
+    """
+    if not ontology_collection:
+        return ontology_collection
+    parts = [p.strip() for p in ontology_collection.split(",") if p.strip()]
+    if not parts:
+        return None
+    known = await _get_tib_collection_ids(client)
+    return ",".join(known.get(p.lower(), p.upper()) for p in parts)
+
+
 async def search_tib_best_match(keyword: str, ontology: Optional[str],  ontology_collection: Optional[str], threshold: int, client: httpx.AsyncClient) -> Optional[Dict]:
     """Find the TIB term closest to `keyword` and report how close it was.
 
@@ -189,10 +232,8 @@ async def search_tib_best_match(keyword: str, ontology: Optional[str],  ontology
         url += f"&ontology={ontology}"
 
     if ontology_collection:
-        # TIB's classification filter is case-sensitive and only recognizes the
-        # uppercase collection id (e.g. "NFDI4CHEM"); a lowercase/mixed-case value
-        # is silently treated as unrecognized and matches nothing, with no error.
-        url += f"&schema=collection&classification={ontology_collection.upper()}"
+        # Expected to already be in TIB's exact casing - see resolve_collection_ids.
+        url += f"&schema=collection&classification={quote(ontology_collection, safe=',')}"
 
 
     print(f"TIB request url: {url}")
@@ -338,9 +379,8 @@ async def extract_iris(req: DocumentRequest) -> Dict[str, Optional[Dict]]:
         print(f"Extracted keywords: {keyword_list}")
 
         ontology = req.ontology
-        ontology_collection = req.ontology_collection
-
         async with httpx.AsyncClient() as client:
+            ontology_collection = await resolve_collection_ids(req.ontology_collection, client)
             tasks = [
                 search_tib_best_match(kw, ontology, ontology_collection, HAMMING_THRESHOLD, client)
                 for kw in keyword_list

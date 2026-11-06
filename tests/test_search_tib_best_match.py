@@ -14,7 +14,8 @@
 
 import httpx
 
-from iri_api import search_tib_best_match
+import iri_api
+from iri_api import resolve_collection_ids, search_tib_best_match
 
 
 def _client(docs, head_status=200):
@@ -107,13 +108,12 @@ async def test_includes_ontology_and_collection_filters_in_the_request():
 
     assert "ontology=chebi" in seen_urls[0]
     assert "schema=collection" in seen_urls[0]
-    assert "classification=CS" in seen_urls[0]
+    assert "classification=cs" in seen_urls[0]
 
 
 async def test_includes_collection_filter_without_an_ontology():
     # This is the shape radar-frontend actually sends: a workspace/contract can be
-    # configured with only an ontology collection (no single ontology), e.g.
-    # KeywordService.groovy's request body {"document": ..., "ontology_collection": "nfdi4chem"}.
+    # configured with only an ontology collection (no single ontology).
     seen_urls = []
 
     def handler(request):
@@ -121,19 +121,15 @@ async def test_includes_collection_filter_without_an_ontology():
         return httpx.Response(200, json={"response": {"docs": []}})
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-        await search_tib_best_match("apoptosis", None, "nfdi4chem", threshold=5, client=client)
+        await search_tib_best_match("apoptosis", None, "DataPLANT", threshold=5, client=client)
 
     assert "ontology=" not in seen_urls[0]
     assert "schema=collection" in seen_urls[0]
-    assert "classification=NFDI4CHEM" in seen_urls[0]
+    # Passed through verbatim: TIB's filter is case-sensitive, "DATAPLANT" matches nothing
+    assert "classification=DataPLANT" in seen_urls[0]
 
 
-async def test_uppercases_the_collection_id_regardless_of_input_casing():
-    # TIB's classification filter is case-sensitive and only recognizes the
-    # uppercase collection id (e.g. "NFDI4CHEM"); a lowercase/mixed-case value is
-    # silently treated as unrecognized and matches nothing, with no error at all.
-    # See: https://api.terminology.tib.eu/api/search?classification=nfdi4chem always
-    # returns zero docs, while classification=NFDI4CHEM returns real matches.
+async def test_url_encodes_collection_ids_with_spaces():
     seen_urls = []
 
     def handler(request):
@@ -141,6 +137,53 @@ async def test_uppercases_the_collection_id_regardless_of_input_casing():
         return httpx.Response(200, json={"response": {"docs": []}})
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-        await search_tib_best_match("apoptosis", None, "Nfdi4Chem", threshold=5, client=client)
+        await search_tib_best_match("apoptosis", None, "FAIR Data Spaces,NFDI4CHEM", threshold=5, client=client)
 
-    assert "classification=NFDI4CHEM" in seen_urls[0]
+    assert "classification=FAIR%20Data%20Spaces,NFDI4CHEM" in seen_urls[0]
+
+
+def _collections_client(ids, status=200):
+    calls = []
+
+    def handler(request):
+        calls.append(str(request.url))
+        return httpx.Response(status, json={"content": ids})
+
+    return httpx.AsyncClient(transport=httpx.MockTransport(handler)), calls
+
+
+async def test_resolve_collection_ids_restores_tib_casing(monkeypatch):
+    monkeypatch.setattr(iri_api, "_tib_collection_ids", None)
+    client, _ = _collections_client(["DataPLANT", "NFDI4Energy", "NFDI4CHEM", "FAIR Data Spaces"])
+    async with client:
+        result = await resolve_collection_ids("dataplant, NFDI4ENERGY,nfdi4chem,fair data spaces", client)
+
+    assert result == "DataPLANT,NFDI4Energy,NFDI4CHEM,FAIR Data Spaces"
+
+
+async def test_resolve_collection_ids_uppercases_unknown_ids_and_caches_the_list(monkeypatch):
+    monkeypatch.setattr(iri_api, "_tib_collection_ids", None)
+    client, calls = _collections_client(["NFDI4CHEM"])
+    async with client:
+        assert await resolve_collection_ids("nfdi4ing", client) == "NFDI4ING"
+        assert await resolve_collection_ids("nfdi4chem", client) == "NFDI4CHEM"
+
+    assert len(calls) == 1
+
+
+async def test_resolve_collection_ids_falls_back_and_retries_when_the_list_fails(monkeypatch):
+    monkeypatch.setattr(iri_api, "_tib_collection_ids", None)
+    client, calls = _collections_client([], status=500)
+    async with client:
+        assert await resolve_collection_ids("nfdi4chem", client) == "NFDI4CHEM"
+        assert await resolve_collection_ids("nfdi4chem", client) == "NFDI4CHEM"
+
+    assert len(calls) == 2
+    assert iri_api._tib_collection_ids is None
+
+
+async def test_resolve_collection_ids_passes_through_empty_values():
+    async with httpx.AsyncClient(transport=httpx.MockTransport(lambda r: httpx.Response(500))) as client:
+        assert await resolve_collection_ids(None, client) is None
+        assert await resolve_collection_ids("", client) == ""
+        assert await resolve_collection_ids(" , ", client) is None

@@ -91,6 +91,11 @@ def test_extract_iris_via_keyllm_backend_filters_blank_keywords(load_backend, mo
 
     monkeypatch.setattr(mod, "search_tib_best_match", fake_search)
 
+    async def fake_resolve(ontology_collection, client):
+        return ontology_collection.upper()
+
+    monkeypatch.setattr(mod, "resolve_collection_ids", fake_resolve)
+
     with _client(mod) as client:
         response = client.post(
             "/extract-iris",
@@ -102,9 +107,10 @@ def test_extract_iris_via_keyllm_backend_filters_blank_keywords(load_backend, mo
         "insulin": {"iri": "https://example.org/insulin"},
         "glucose": {"iri": "https://example.org/glucose"},
     }
+    # The collection is resolved to TIB's exact id once, before the per-keyword searches
     assert calls == [
-        ("insulin", "chebi", "cs"),
-        ("glucose", "chebi", "cs"),
+        ("insulin", "chebi", "CS"),
+        ("glucose", "chebi", "CS"),
     ]
 
 
