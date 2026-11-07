@@ -167,18 +167,27 @@ def hamming_distance(s1, s2):
     s2 = s2.ljust(max_len)
     return sum(el1 != el2 for el1, el2 in zip(s1.lower(), s2.lower()))
 
-# The server is there but refuses this (automated) request, which says nothing about whether the
-# IRI is dead: e.g. www.loc.gov answers every non-browser client with 403, so without this no
-# PREMIS (premis3) term could ever be linked. 405: the server doesn't allow HEAD.
-IRI_REFUSED_STATUS_CODES = {401, 403, 405, 429}
+# Only these answers prove an IRI dead. Anything else is no proof either way and keeps the match:
+# hosts behind bot protection answer automated requests with 403 (www.loc.gov, which hosts the
+# PREMIS / premis3 terms), and after a burst of requests also with a challenge (503) or by
+# stalling, so requiring a 200 dropped every PREMIS term, depending on the protection's mood.
+IRI_DEAD_STATUS_CODES = {404, 410}
 
 
 async def check_iri_exists(iri, client: httpx.AsyncClient) -> bool:
+    """False only if the IRI is definitely dead: answered with 404/410, or its host can't be
+    resolved / refuses the connection. Other statuses and timeouts don't disprove it."""
     try:
         response = await client.head(iri, follow_redirects=True, timeout=5)
-        return response.status_code == 200 or response.status_code in IRI_REFUSED_STATUS_CODES
-    except httpx.RequestError:
+    except httpx.TimeoutException:
+        print(f"IRI check timed out, keeping the match: {iri}", flush=True)
+        return True
+    except httpx.RequestError as e:
+        print(f"IRI check failed ({type(e).__name__}), dropping the match: {iri}", flush=True)
         return False
+    if response.status_code != 200:
+        print(f"IRI check status {response.status_code}: {iri}", flush=True)
+    return response.status_code not in IRI_DEAD_STATUS_CODES
 
 TIB_COLLECTIONS_URL = "https://api.terminology.tib.eu/api/ontologies/schemavalues?schema=collection"
 

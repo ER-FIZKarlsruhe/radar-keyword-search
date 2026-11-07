@@ -226,9 +226,11 @@ curl --noproxy '*' -X POST http://localhost:8001/extract-iris \
 
    * `tib` (default): each keyword is searched in the TIB Terminology API (optionally scoped by
      `ontology` / `ontology_collection`). The closest label/synonym by Hamming distance wins; it is
-     `matched` if the distance is `<= max_distance` (default 5) and its IRI answers a HEAD request
-     with HTTP 200, or with 401/403/405/429 (the server refuses automated requests, e.g.
-     `www.loc.gov` for PREMIS terms, which doesn't mean the IRI is dead).
+     `matched` if the distance is `<= max_distance` (default 5) and its IRI isn't provably dead:
+     only a HEAD answer of 404/410, or a host that can't be resolved or refuses the connection,
+     drops the match. Other statuses and timeouts keep it, since hosts behind bot protection
+     (e.g. `www.loc.gov` for PREMIS terms) answer automated requests with 403, a 503 challenge
+     or by stalling. Every non-200 answer is logged.
    * `gnd`: each keyword is searched in the GND via lobid-gnd, restricted to the types in
      `GND_TYPES`. The closest preferred/variant name wins (on a tie, the type listed first in
      `GND_TYPES`); it is `matched` if the distance is `<= max_distance` (no HEAD check - lobid only

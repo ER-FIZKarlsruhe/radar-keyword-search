@@ -26,17 +26,19 @@ async def test_returns_true_for_200_response():
         assert await check_iri_exists("https://example.org/thing", client) is True
 
 
-async def test_returns_false_for_non_200_response():
+@pytest.mark.parametrize("status", [404, 410])
+async def test_returns_false_for_a_missing_iri(status):
     async def handler(request):
-        return httpx.Response(404)
+        return httpx.Response(status)
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         assert await check_iri_exists("https://example.org/missing", client) is False
 
 
-@pytest.mark.parametrize("status", [401, 403, 405, 429])
-async def test_returns_true_when_the_server_refuses_the_request(status):
-    # e.g. www.loc.gov (PREMIS) answers every automated client with 403
+@pytest.mark.parametrize("status", [401, 403, 405, 429, 500, 503])
+async def test_returns_true_when_the_answer_does_not_prove_the_iri_dead(status):
+    # e.g. www.loc.gov (PREMIS) answers automated clients with 403, and with a 503 challenge
+    # after a burst of requests
     async def handler(request):
         return httpx.Response(status)
 
@@ -44,16 +46,15 @@ async def test_returns_true_when_the_server_refuses_the_request(status):
         assert await check_iri_exists("http://www.loc.gov/premis/rdf/v3/Fixity", client) is True
 
 
-@pytest.mark.parametrize("status", [404, 410, 500, 503])
-async def test_returns_false_for_a_missing_iri_or_a_server_error(status):
-    async def handler(request):
-        return httpx.Response(status)
+async def test_returns_true_on_a_timeout():
+    def handler(request):
+        raise httpx.ReadTimeout("slow", request=request)
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-        assert await check_iri_exists("https://example.org/missing", client) is False
+        assert await check_iri_exists("http://www.loc.gov/premis/rdf/v3/Fixity", client) is True
 
 
-async def test_returns_false_on_request_error():
+async def test_returns_false_when_the_host_is_unreachable():
     def handler(request):
         raise httpx.ConnectError("boom", request=request)
 
