@@ -45,8 +45,21 @@ async def test_returns_best_match_within_threshold():
         "best_term": "insulin",
         "distance": 0,
         "ontology_name": "chebi",
+        "source": "tib",
+        "keyword_scheme": "Other",
+        "scheme_uri": "https://example.org/",
+        "classification_code": "insulin",
         "matched": True,
     }
+
+
+async def test_prefers_tibs_short_form_as_classification_code():
+    docs = [{"iri": "http://purl.obolibrary.org/obo/CHEBI_5931", "label": "insulin", "short_form": "CHEBI_5931"}]
+    async with _client(docs) as client:
+        result = await search_tib_best_match("insulin", None, None, threshold=5, client=client)
+
+    assert result["scheme_uri"] == "http://purl.obolibrary.org/obo/"
+    assert result["classification_code"] == "CHEBI_5931"
 
 
 async def test_marks_unmatched_when_distance_exceeds_threshold():

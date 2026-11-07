@@ -14,7 +14,7 @@
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
-from typing import Dict, Optional
+from typing import Dict, Literal, Optional
 import uvicorn
 import asyncio
 import httpx
@@ -272,12 +272,17 @@ async def search_tib_best_match(keyword: str, ontology: Optional[str],  ontology
                 dist = hamming_distance(keyword, term)
                 if dist < best_distance:
                     best_distance = dist
+                    scheme_uri, last_segment = _split_iri(iri)
                     best_match = {
                         "iri": iri,
                         "label": doc.get("label"),
                         "best_term": term,
                         "distance": dist,
-                        "ontology_name": doc.get("ontology_name")
+                        "ontology_name": doc.get("ontology_name"),
+                        "source": "tib",
+                        "keyword_scheme": KEYWORD_SCHEME_OTHER,
+                        "scheme_uri": scheme_uri,
+                        "classification_code": doc.get("short_form") or last_segment,
                     }
 
     if not best_match:
@@ -288,6 +293,103 @@ async def search_tib_best_match(keyword: str, ontology: Optional[str],  ontology
     # usable link, if that one IRI doesn't resolve.
     best_match["matched"] = best_match["distance"] <= threshold and await check_iri_exists(best_match["iri"], client)
     return best_match
+
+
+# -------------------------------
+# GND (Gemeinsame Normdatei) via lobid-gnd
+# -------------------------------
+# lobid-gnd (hbz) is a JSON search API over the GND authority file; it's also
+# what radar-frontend's interactive GND keyword typeahead uses (gndManager.js).
+GND_SEARCH_URL = os.getenv("GND_SEARCH_URL", "https://lobid.org/gnd/search")
+GND_SCHEME_URI = "https://d-nb.info/gnd/"
+GND_SEARCH_SIZE = 20
+
+# Without a type filter, a plain-text GND search is dominated by works, conferences and
+# corporate bodies (e.g. "Goethe" returns five *Works* titled "Goethe" before the person or
+# any subject heading), which is noise for topic keywords. So only subject headings are
+# searched by default; GND_TYPES can widen that, e.g. "SubjectHeading,Person,PlaceOrGeographicName".
+GND_TYPES = [t.strip() for t in os.getenv("GND_TYPES", "SubjectHeading").split(",") if t.strip()]
+
+# Values of RADAR's keywordScheme enum (radar-common RadarTypes.xsd)
+KEYWORD_SCHEME_GND = "GND"
+KEYWORD_SCHEME_OTHER = "Other"
+
+
+def _split_iri(iri: str):
+    """Split an IRI into (scheme URI incl. trailing '/', last path segment) - the same split
+    radar-frontend applies to TIB IRIs for a keyword's schemeURI/classificationCode."""
+    idx = iri.rfind("/")
+    if idx == -1:
+        return None, iri
+    return iri[: idx + 1], iri[idx + 1:]
+
+
+async def search_gnd_best_match(keyword: str, threshold: int, client: httpx.AsyncClient) -> Optional[Dict]:
+    """Find the GND entity closest to `keyword`, analogous to search_tib_best_match.
+
+    Same return contract: the closest candidate (by Hamming distance over the preferred
+    name and all variant names) with a `matched` flag, or None if the search failed or
+    found nothing. Unlike TIB, no extra HEAD request is made against the winning IRI:
+    lobid only returns live GND records, and https://d-nb.info/gnd/... merely redirects to
+    the DNB portal's HTML search page, so a liveness check would add nothing but load.
+    """
+    params = {"q": keyword, "format": "json", "size": GND_SEARCH_SIZE}
+    if GND_TYPES:
+        params["filter"] = " OR ".join(f"type:{t}" for t in GND_TYPES)
+
+    try:
+        response = await client.get(GND_SEARCH_URL, params=params, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+    except (httpx.HTTPError, ValueError):
+        # See search_tib_best_match: one failing term must not fail the whole batch.
+        return None
+
+    best_match = None
+    best_distance = float("inf")
+    for member in data.get("member") or []:
+        iri = member.get("id")
+        preferred = member.get("preferredName")
+        if not iri or not preferred:
+            continue
+        for term in [preferred, *(member.get("variantName") or [])]:
+            dist = hamming_distance(keyword, term)
+            if dist < best_distance:
+                best_distance = dist
+                best_match = {
+                    "iri": iri,
+                    "label": preferred,
+                    "best_term": term,
+                    "distance": dist,
+                    "ontology_name": None,
+                    "source": "gnd",
+                    "keyword_scheme": KEYWORD_SCHEME_GND,
+                    "scheme_uri": GND_SCHEME_URI,
+                    "classification_code": member.get("gndIdentifier") or _split_iri(iri)[1],
+                }
+
+    if not best_match:
+        return None
+    best_match["matched"] = best_match["distance"] <= threshold
+    return best_match
+
+
+def pick_better_match(a: Optional[Dict], b: Optional[Dict]) -> Optional[Dict]:
+    """Choose between two candidates for one keyword (terminology="both").
+
+    A matched candidate beats an unmatched one, then the smaller distance wins. On a tie
+    the first argument wins - extract_iris passes TIB first, since its ontologies are the
+    ones scoped to the workspace's domain.
+    """
+    if a is None or b is None:
+        return a or b
+    if a["matched"] != b["matched"]:
+        return a if a["matched"] else b
+    return a if a["distance"] <= b["distance"] else b
+
+async def _none() -> None:
+    return None
+
 
 DEFAULT_MAX_KEYWORDS = 10
 
@@ -348,6 +450,10 @@ class DocumentRequest(BaseModel):
     ontology_collection: Optional[str] = None
     model: Optional[str] = None
     max_keywords: Optional[int] = Field(default=None, ge=1, le=20)
+    # Where the extracted keywords are looked up: the TIB Terminology Service, the GND,
+    # or both (the better match per keyword wins). ontology/ontology_collection only
+    # apply to TIB.
+    terminology: Literal["tib", "gnd", "both"] = "tib"
 
 # -------------------------------
 # Endpoint
@@ -378,14 +484,19 @@ async def extract_iris(req: DocumentRequest) -> Dict[str, Optional[Dict]]:
         keyword_list = _extract_keyword_list(req.document, req.model, req.max_keywords or DEFAULT_MAX_KEYWORDS)
         print(f"Extracted keywords: {keyword_list}")
 
-        ontology = req.ontology
+        use_tib = req.terminology in ("tib", "both")
+        use_gnd = req.terminology in ("gnd", "both")
+
+        async def lookup(kw: str, ontology_collection: Optional[str]) -> Optional[Dict]:
+            tib, gnd = await asyncio.gather(
+                search_tib_best_match(kw, req.ontology, ontology_collection, HAMMING_THRESHOLD, client) if use_tib else _none(),
+                search_gnd_best_match(kw, HAMMING_THRESHOLD, client) if use_gnd else _none(),
+            )
+            return pick_better_match(tib, gnd)
+
         async with httpx.AsyncClient() as client:
-            ontology_collection = await resolve_collection_ids(req.ontology_collection, client)
-            tasks = [
-                search_tib_best_match(kw, ontology, ontology_collection, HAMMING_THRESHOLD, client)
-                for kw in keyword_list
-            ]
-            results = await asyncio.gather(*tasks)
+            ontology_collection = await resolve_collection_ids(req.ontology_collection, client) if use_tib else None
+            results = await asyncio.gather(*(lookup(kw, ontology_collection) for kw in keyword_list))
 
         return dict(zip(keyword_list, results))
 

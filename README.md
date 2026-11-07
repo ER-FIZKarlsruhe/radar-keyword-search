@@ -1,6 +1,7 @@
 # radar-keyword-search with TIB Terminology Service Support
 
-This service provides keyword extraction from documents using one of two interchangeable backends — `keybert`, a custom PubMedBERT model (CPU only), or `keyllm`, a local Ollama model — followed by entity linking to the [TIB Terminology Service](https://api.terminology.tib.eu).
+This service provides keyword extraction from documents using one of two interchangeable backends — `keybert`, a custom PubMedBERT model (CPU only), or `keyllm`, a local Ollama model — followed by entity linking to the [TIB Terminology Service](https://api.terminology.tib.eu), the
+[GND](https://sta.dnb.de/doc/GND) (Gemeinsame Normdatei, via [lobid-gnd](https://lobid.org/gnd)), or both.
 
 > **How to run this service:** in **production, always use the Docker image** (`docker/dockerfile`) — see [Running in Production](#-running-in-production-docker) below. The `python`/`pip` commands further down are for **local development only** (running tests, debugging, iterating on `iri_api.py`).
 
@@ -35,6 +36,13 @@ Extract keywords/IRIs from a document:
 curl -v --noproxy '*' -X POST http://localhost:8000/extract-iris \
   -H 'Content-Type: application/json' \
   -d '{"document": "The mitochondria is the powerhouse of the cell and regulates apoptosis."}'
+```
+
+Link the keywords to GND subject headings instead of TIB (`"both"` searches TIB and GND and keeps
+the better match per keyword):
+
+```bash
+curl -v --noproxy '*' -X POST http://localhost:8000/extract-iris   -H 'Content-Type: application/json'   -d '{"document": "Historisch-kritische Edition mit Schauspielmusik und Forschungsdatenmanagement", "model": "gbert", "terminology": "gnd"}'
 ```
 
 Same, but restricted to a specific ontology (`ncit`):
@@ -214,18 +222,34 @@ curl --noproxy '*' -X POST http://localhost:8001/extract-iris \
    * `keyllm` backend: calls a local Ollama server's OpenAI-compatible chat API directly, requesting
      structured JSON output
 
-2. **IRI Linking via TIB**:
+2. **IRI Linking** (chosen per request via `terminology`):
 
-   * For each extracted keyword, a search is sent to the TIB Terminology API.
-   * The best match is selected based on the Hamming distance threshold (`<= 5`) and IRI availability.
-   * Only valid IRIs (HTTP 200 on HEAD request) are returned.
+   * `tib` (default): each keyword is searched in the TIB Terminology API (optionally scoped by
+     `ontology` / `ontology_collection`). The closest label/synonym by Hamming distance wins; it is
+     `matched` if the distance is `<= 5` and its IRI answers a HEAD request with HTTP 200.
+   * `gnd`: each keyword is searched in the GND via lobid-gnd, by default restricted to subject
+     headings (`GND_TYPES`). The closest preferred/variant name wins; it is `matched` if the
+     distance is `<= 5` (no HEAD check - lobid only returns live records). `ontology` and
+     `ontology_collection` are ignored.
+   * `both`: both lookups run in parallel; a matched candidate beats an unmatched one, then the
+     smaller distance wins, and on a tie TIB wins.
+   * The GND is German: English keywords from English-only models (e.g. `music`) rarely hit a GND
+     heading (`Musik`) exactly. Prefer a German or multilingual model (`gbert`,
+     `multilingual-e5`, ...) for German documents linked to the GND.
 
 ---
 
 ## 🛠 Configuration
 
 * **TIB API Endpoint**: `https://api.terminology.tib.eu/api/search`
+* **GND API Endpoint**: `https://lobid.org/gnd/search`
 * **Environment Variables**:
+
+  * `GND_SEARCH_URL`: Optional, defaults to `https://lobid.org/gnd/search`
+  * `GND_TYPES`: Optional, comma-separated GND entity types searched for `gnd`/`both`, defaults
+    to `SubjectHeading`. Without a filter, works and conferences dominate the results (e.g.
+    `Goethe` returns five *Works* first); widen it e.g. to
+    `SubjectHeading,Person,PlaceOrGeographicName,CorporateBody` if needed.
 
   * `EXTRACTION_BACKEND`: `keybert` (default) or `keyllm`
   * `OLLAMA_BASE_URL`: Optional, defaults to `http://localhost:11434/v1`
@@ -241,7 +265,11 @@ curl --noproxy '*' -X POST http://localhost:8001/extract-iris \
 ```json
 {
   "document": "Text to extract keywords from",
-  "ontology": "Optional ontology identifier for filtering (e.g., et)"
+  "terminology": "Optional: tib (default) | gnd | both",
+  "ontology": "Optional TIB ontology id(s) for filtering (e.g., et); TIB only",
+  "ontology_collection": "Optional TIB collection id(s) (e.g., NFDI4CHEM); TIB only",
+  "model": "Optional BERT model name, see GET /models (keybert backend only)",
+  "max_keywords": "Optional, 1-20, default 10"
 }
 ```
 
@@ -251,18 +279,42 @@ curl --noproxy '*' -X POST http://localhost:8001/extract-iris \
 
 ```json
 {
-  "keyword1": {
-    "iri": "...",
-    "label": "...",
-    "best_term": "...",
-    "distance": 2,
-    "ontology_name": "..."
+  "insulin": {
+    "iri": "http://purl.obolibrary.org/obo/CHEBI_5931",
+    "label": "insulin",
+    "best_term": "insulin",
+    "distance": 0,
+    "matched": true,
+    "ontology_name": "chebi",
+    "source": "tib",
+    "keyword_scheme": "Other",
+    "scheme_uri": "http://purl.obolibrary.org/obo/",
+    "classification_code": "CHEBI_5931"
   },
-  "keyword2": null
+  "Schauspielmusik": {
+    "iri": "https://d-nb.info/gnd/4280160-6",
+    "label": "Schauspielmusik",
+    "best_term": "Schauspielmusik",
+    "distance": 0,
+    "matched": true,
+    "ontology_name": null,
+    "source": "gnd",
+    "keyword_scheme": "GND",
+    "scheme_uri": "https://d-nb.info/gnd/",
+    "classification_code": "4280160-6"
+  },
+  "keyword3": null
 }
 ```
 
-> If no match is found under the Hamming threshold or IRI validation fails, the value will be `null`.
+* `matched`: whether the candidate is good enough to link (distance `<= 5`, and for TIB a live IRI).
+  The closest candidate is returned even when it isn't, so clients can show a match-quality rating.
+* `source`: `tib` or `gnd` - which terminology the candidate came from.
+* `keyword_scheme`, `scheme_uri`, `classification_code`: ready-made values for a RADAR keyword's
+  `keywordScheme` (`GND` / `Other`), `schemeURI` and `classificationCode` attributes.
+* `label`: the term's preferred label; `best_term`: the label or synonym/variant that actually matched.
+
+> The value is `null` only if the search failed or returned no candidates at all.
 
 ---
 
@@ -344,6 +396,12 @@ location with the `OLLAMA_TEST_CACHE_DIR` environment variable if needed.
 
 > The container always runs on CPU, even on a machine with an NVIDIA GPU — this test only needs to
 > prove the Ollama *wiring* works, not benchmark inference speed.
+
+#### GND (lobid) Test
+
+`test_gnd_service.py` does the same against the real `https://lobid.org/gnd` API, using GND
+subject headings from a real RADAR4Culture dataset, and checks the `both` mode against TIB + lobid.
+It needs outbound network access to `lobid.org` and `api.terminology.tib.eu`.
 
 #### TIB Terminology Service Test
 

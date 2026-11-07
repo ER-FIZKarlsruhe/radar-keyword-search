@@ -178,3 +178,73 @@ def test_extract_iris_via_keyllm_backend_handles_no_keywords_found(load_backend)
 
     assert response.status_code == 200
     assert response.json() == {}
+
+
+def _fake_lookups(monkeypatch, calls, tib_result=None, gnd_result=None):
+    async def fake_tib(keyword, ontology, ontology_collection, threshold, client):
+        calls.append(("tib", keyword))
+        return tib_result
+
+    async def fake_gnd(keyword, threshold, client):
+        calls.append(("gnd", keyword))
+        return gnd_result
+
+    async def fake_resolve(ontology_collection, client):
+        calls.append(("resolve", ontology_collection))
+        return ontology_collection
+
+    monkeypatch.setattr(iri_api, "search_tib_best_match", fake_tib)
+    monkeypatch.setattr(iri_api, "search_gnd_best_match", fake_gnd)
+    monkeypatch.setattr(iri_api, "resolve_collection_ids", fake_resolve)
+
+
+def test_extract_iris_defaults_to_tib_only(monkeypatch):
+    iri_api.kw_model.extract_keywords.return_value = [("edition", 0.9)]
+    calls = []
+    _fake_lookups(monkeypatch, calls)
+
+    with _client() as client:
+        response = client.post("/extract-iris", json={"document": "edition"})
+
+    assert response.status_code == 200
+    assert ("tib", "edition") in calls
+    assert not any(source == "gnd" for source, _ in calls)
+
+
+def test_extract_iris_with_gnd_skips_tib_entirely(monkeypatch):
+    iri_api.kw_model.extract_keywords.return_value = [("edition", 0.9)]
+    gnd = {"iri": "https://d-nb.info/gnd/4132033-5", "source": "gnd", "matched": True, "distance": 0}
+    calls = []
+    _fake_lookups(monkeypatch, calls, gnd_result=gnd)
+
+    with _client() as client:
+        response = client.post(
+            "/extract-iris",
+            json={"document": "edition", "terminology": "gnd", "ontology_collection": "nfdi4culture"},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {"edition": gnd}
+    assert calls == [("gnd", "edition")]
+
+
+def test_extract_iris_with_both_returns_the_better_match(monkeypatch):
+    iri_api.kw_model.extract_keywords.return_value = [("edition", 0.9)]
+    tib = {"iri": "https://example.org/edition", "source": "tib", "matched": False, "distance": 6}
+    gnd = {"iri": "https://d-nb.info/gnd/4132033-5", "source": "gnd", "matched": True, "distance": 0}
+    calls = []
+    _fake_lookups(monkeypatch, calls, tib_result=tib, gnd_result=gnd)
+
+    with _client() as client:
+        response = client.post("/extract-iris", json={"document": "edition", "terminology": "both"})
+
+    assert response.status_code == 200
+    assert response.json() == {"edition": gnd}
+    assert {c[0] for c in calls} == {"tib", "gnd", "resolve"}
+
+
+def test_extract_iris_rejects_an_unknown_terminology():
+    with _client() as client:
+        response = client.post("/extract-iris", json={"document": "x", "terminology": "wikidata"})
+
+    assert response.status_code == 422
