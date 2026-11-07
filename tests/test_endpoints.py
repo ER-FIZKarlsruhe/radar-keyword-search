@@ -248,3 +248,35 @@ def test_extract_iris_rejects_an_unknown_terminology():
         response = client.post("/extract-iris", json={"document": "x", "terminology": "wikidata"})
 
     assert response.status_code == 422
+
+
+def test_extract_iris_passes_max_distance_as_the_threshold(monkeypatch):
+    iri_api.kw_model.extract_keywords.return_value = [("napoleon", 0.9)]
+    thresholds = []
+
+    async def fake_tib(keyword, ontology, ontology_collection, threshold, client):
+        thresholds.append(("tib", threshold))
+
+    async def fake_gnd(keyword, threshold, client):
+        thresholds.append(("gnd", threshold))
+
+    async def fake_resolve(ontology_collection, client):
+        return ontology_collection
+
+    monkeypatch.setattr(iri_api, "search_tib_best_match", fake_tib)
+    monkeypatch.setattr(iri_api, "search_gnd_best_match", fake_gnd)
+    monkeypatch.setattr(iri_api, "resolve_collection_ids", fake_resolve)
+
+    with _client() as client:
+        client.post("/extract-iris", json={"document": "x", "terminology": "both", "max_distance": 0})
+        client.post("/extract-iris", json={"document": "x", "terminology": "both"})
+
+    assert sorted(thresholds[:2]) == [("gnd", 0), ("tib", 0)]
+    assert sorted(thresholds[2:]) == [("gnd", 5), ("tib", 5)]
+
+
+def test_extract_iris_rejects_a_max_distance_above_the_threshold():
+    with _client() as client:
+        response = client.post("/extract-iris", json={"document": "x", "max_distance": 6})
+
+    assert response.status_code == 422

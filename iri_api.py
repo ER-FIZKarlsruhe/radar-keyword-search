@@ -304,11 +304,20 @@ GND_SEARCH_URL = os.getenv("GND_SEARCH_URL", "https://lobid.org/gnd/search")
 GND_SCHEME_URI = "https://d-nb.info/gnd/"
 GND_SEARCH_SIZE = 20
 
-# Without a type filter, a plain-text GND search is dominated by works, conferences and
-# corporate bodies (e.g. "Goethe" returns five *Works* titled "Goethe" before the person or
-# any subject heading), which is noise for topic keywords. So only subject headings are
-# searched by default; GND_TYPES can widen that, e.g. "SubjectHeading,Person,PlaceOrGeographicName".
-GND_TYPES = [t.strip() for t in os.getenv("GND_TYPES", "SubjectHeading").split(",") if t.strip()]
+# GND entity types searched, in order of preference. Without a type filter, a plain-text GND
+# search is dominated by works and conferences (e.g. "Goethe" returns five *Works* titled
+# "Goethe" first), which is noise for keywords. The order matters: when candidates of
+# different types are equally close, the type listed first wins, so e.g. the subject heading
+# "Faust" beats a person whose name is just "Faust".
+GND_TYPES = [
+    t.strip()
+    for t in os.getenv("GND_TYPES", "SubjectHeading,PlaceOrGeographicName,CorporateBody,Person").split(",")
+    if t.strip()
+]
+
+# A single word can't identify a person: "napoleon" or "goethe" would otherwise match some
+# person whose (variant) name is just "Napoleon" or "Goethe" exactly - see _gnd_person_terms.
+GND_PERSON_TYPE = "Person"
 
 # Values of RADAR's keywordScheme enum (radar-common RadarTypes.xsd)
 KEYWORD_SCHEME_GND = "GND"
@@ -324,18 +333,58 @@ def _split_iri(iri: str):
     return iri[: idx + 1], iri[idx + 1:]
 
 
+def _gnd_type_rank(member: Dict) -> int:
+    """Position of the member's most preferred type in GND_TYPES (lower is better)."""
+    types = set(member.get("type") or [])
+    return next((i for i, t in enumerate(GND_TYPES) if t in types), len(GND_TYPES))
+
+
+def _natural_name_order(name: str) -> Optional[str]:
+    """'Goethe, Johann Wolfgang von' -> 'Johann Wolfgang von Goethe'; None if not inverted."""
+    parts = [p.strip() for p in name.split(",")]
+    if len(parts) != 2 or not all(parts):
+        return None
+    return f"{parts[1]} {parts[0]}"
+
+
+def _gnd_candidate_terms(keyword: str, member: Dict) -> list:
+    """The names of a lobid member to compare `keyword` against.
+
+    Persons are only considered for multi-word keywords, and their inverted names
+    ("Surname, Forenames") are also compared in natural order, so an extracted
+    "Johann Wolfgang von Goethe" can match the GND's "Goethe, Johann Wolfgang von".
+    """
+    names = [member["preferredName"], *(member.get("variantName") or [])]
+    if GND_PERSON_TYPE not in (member.get("type") or []):
+        return names
+    if len(keyword.split()) < 2:
+        return []
+    terms = []
+    for name in names:
+        terms.append(name)
+        natural = _natural_name_order(name)
+        if natural:
+            terms.append(natural)
+    return terms
+
+
 async def search_gnd_best_match(keyword: str, threshold: int, client: httpx.AsyncClient) -> Optional[Dict]:
     """Find the GND entity closest to `keyword`, analogous to search_tib_best_match.
 
     Same return contract: the closest candidate (by Hamming distance over the preferred
-    name and all variant names) with a `matched` flag, or None if the search failed or
-    found nothing. Unlike TIB, no extra HEAD request is made against the winning IRI:
+    name and all variant names; on a tie, the type listed first in GND_TYPES wins) with a
+    `matched` flag, or None if the search failed or found nothing. Unlike TIB, no extra HEAD request is made against the winning IRI:
     lobid only returns live GND records, and https://d-nb.info/gnd/... merely redirects to
     the DNB portal's HTML search page, so a liveness check would add nothing but load.
     """
     params = {"q": keyword, "format": "json", "size": GND_SEARCH_SIZE}
-    if GND_TYPES:
-        params["filter"] = " OR ".join(f"type:{t}" for t in GND_TYPES)
+    # Persons can't match a single word (see _gnd_candidate_terms), so don't let them fill the
+    # result page and push out the subject headings that could
+    types = [t for t in GND_TYPES if t != GND_PERSON_TYPE or len(keyword.split()) >= 2]
+    if types:
+        params["filter"] = " OR ".join(f"type:{t}" for t in types)
+    elif GND_TYPES:
+        return None
 
     try:
         response = await client.get(GND_SEARCH_URL, params=params, timeout=10)
@@ -346,16 +395,17 @@ async def search_gnd_best_match(keyword: str, threshold: int, client: httpx.Asyn
         return None
 
     best_match = None
-    best_distance = float("inf")
+    best_key = (float("inf"), float("inf"))
     for member in data.get("member") or []:
         iri = member.get("id")
         preferred = member.get("preferredName")
         if not iri or not preferred:
             continue
-        for term in [preferred, *(member.get("variantName") or [])]:
+        rank = _gnd_type_rank(member)
+        for term in _gnd_candidate_terms(keyword, member):
             dist = hamming_distance(keyword, term)
-            if dist < best_distance:
-                best_distance = dist
+            if (dist, rank) < best_key:
+                best_key = (dist, rank)
                 best_match = {
                     "iri": iri,
                     "label": preferred,
@@ -454,6 +504,10 @@ class DocumentRequest(BaseModel):
     # or both (the better match per keyword wins). ontology/ontology_collection only
     # apply to TIB.
     terminology: Literal["tib", "gnd", "both"] = "tib"
+    # Accept a match only up to this Hamming distance; 0 = exact matches only (ignoring
+    # case). Defaults to HAMMING_THRESHOLD. Closer candidates are still reported with
+    # matched=false, so clients can show how close they were.
+    max_distance: Optional[int] = Field(default=None, ge=0, le=HAMMING_THRESHOLD)
 
 # -------------------------------
 # Endpoint
@@ -484,13 +538,14 @@ async def extract_iris(req: DocumentRequest) -> Dict[str, Optional[Dict]]:
         keyword_list = _extract_keyword_list(req.document, req.model, req.max_keywords or DEFAULT_MAX_KEYWORDS)
         print(f"Extracted keywords: {keyword_list}")
 
+        threshold = HAMMING_THRESHOLD if req.max_distance is None else req.max_distance
         use_tib = req.terminology in ("tib", "both")
         use_gnd = req.terminology in ("gnd", "both")
 
         async def lookup(kw: str, ontology_collection: Optional[str]) -> Optional[Dict]:
             tib, gnd = await asyncio.gather(
-                search_tib_best_match(kw, req.ontology, ontology_collection, HAMMING_THRESHOLD, client) if use_tib else _none(),
-                search_gnd_best_match(kw, HAMMING_THRESHOLD, client) if use_gnd else _none(),
+                search_tib_best_match(kw, req.ontology, ontology_collection, threshold, client) if use_tib else _none(),
+                search_gnd_best_match(kw, threshold, client) if use_gnd else _none(),
             )
             return pick_better_match(tib, gnd)
 

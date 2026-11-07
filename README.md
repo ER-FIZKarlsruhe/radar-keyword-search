@@ -226,13 +226,23 @@ curl --noproxy '*' -X POST http://localhost:8001/extract-iris \
 
    * `tib` (default): each keyword is searched in the TIB Terminology API (optionally scoped by
      `ontology` / `ontology_collection`). The closest label/synonym by Hamming distance wins; it is
-     `matched` if the distance is `<= 5` and its IRI answers a HEAD request with HTTP 200.
-   * `gnd`: each keyword is searched in the GND via lobid-gnd, by default restricted to subject
-     headings (`GND_TYPES`). The closest preferred/variant name wins; it is `matched` if the
-     distance is `<= 5` (no HEAD check - lobid only returns live records). `ontology` and
-     `ontology_collection` are ignored.
+     `matched` if the distance is `<= max_distance` (default 5) and its IRI answers a HEAD request
+     with HTTP 200.
+   * `gnd`: each keyword is searched in the GND via lobid-gnd, restricted to the types in
+     `GND_TYPES`. The closest preferred/variant name wins (on a tie, the type listed first in
+     `GND_TYPES`); it is `matched` if the distance is `<= max_distance` (no HEAD check - lobid only
+     returns live records). `ontology` and `ontology_collection` are ignored.
+     * Persons are only matched for keywords of at least two words: a single word like `goethe` or
+       `napoleon` would otherwise hit some person whose (variant) name is exactly that. Inverted
+       names are also compared in natural order, so `Johann Wolfgang von Goethe` matches the GND's
+       `Goethe, Johann Wolfgang von`. Single-word keywords come from `keybert`; full names
+       typically from `keyllm`.
    * `both`: both lookups run in parallel; a matched candidate beats an unmatched one, then the
      smaller distance wins, and on a tie TIB wins.
+   * `max_distance`: the Hamming distance pads the shorter string, so a keyword that's merely the
+     start of a longer term only costs the extra characters - `napoleon` vs. `Napoleon-Satz` is 5,
+     just within the default threshold. `"max_distance": 0` accepts exact matches only (ignoring
+     case); the closest candidate is still returned with `matched: false`.
    * The GND is German: English keywords from English-only models (e.g. `music`) rarely hit a GND
      heading (`Musik`) exactly. Prefer a German or multilingual model (`gbert`,
      `multilingual-e5`, ...) for German documents linked to the GND.
@@ -246,10 +256,10 @@ curl --noproxy '*' -X POST http://localhost:8001/extract-iris \
 * **Environment Variables**:
 
   * `GND_SEARCH_URL`: Optional, defaults to `https://lobid.org/gnd/search`
-  * `GND_TYPES`: Optional, comma-separated GND entity types searched for `gnd`/`both`, defaults
-    to `SubjectHeading`. Without a filter, works and conferences dominate the results (e.g.
-    `Goethe` returns five *Works* first); widen it e.g. to
-    `SubjectHeading,Person,PlaceOrGeographicName,CorporateBody` if needed.
+  * `GND_TYPES`: Optional, comma-separated GND entity types searched for `gnd`/`both`, in order
+    of preference, defaults to `SubjectHeading,PlaceOrGeographicName,CorporateBody,Person`. Works
+    and conferences are deliberately left out: they dominate unfiltered results (e.g. `Goethe`
+    returns five *Works* first).
 
   * `EXTRACTION_BACKEND`: `keybert` (default) or `keyllm`
   * `OLLAMA_BASE_URL`: Optional, defaults to `http://localhost:11434/v1`
@@ -269,7 +279,8 @@ curl --noproxy '*' -X POST http://localhost:8001/extract-iris \
   "ontology": "Optional TIB ontology id(s) for filtering (e.g., et); TIB only",
   "ontology_collection": "Optional TIB collection id(s) (e.g., NFDI4CHEM); TIB only",
   "model": "Optional BERT model name, see GET /models (keybert backend only)",
-  "max_keywords": "Optional, 1-20, default 10"
+  "max_keywords": "Optional, 1-20, default 10",
+  "max_distance": "Optional, 0-5, default 5; 0 = exact matches only"
 }
 ```
 
@@ -307,7 +318,8 @@ curl --noproxy '*' -X POST http://localhost:8001/extract-iris \
 }
 ```
 
-* `matched`: whether the candidate is good enough to link (distance `<= 5`, and for TIB a live IRI).
+* `matched`: whether the candidate is good enough to link (distance `<= max_distance`, and for TIB a
+  live IRI).
   The closest candidate is returned even when it isn't, so clients can show a match-quality rating.
 * `source`: `tib` or `gnd` - which terminology the candidate came from.
 * `keyword_scheme`, `scheme_uri`, `classification_code`: ready-made values for a RADAR keyword's

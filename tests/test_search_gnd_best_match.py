@@ -105,12 +105,30 @@ async def test_filters_by_the_configured_gnd_types(monkeypatch):
     monkeypatch.setattr(iri_api, "GND_TYPES", ["SubjectHeading", "Person"])
     seen = []
     async with _client([], seen) as client:
-        await search_gnd_best_match("Goethe", threshold=5, client=client)
+        await search_gnd_best_match("Johann Wolfgang von Goethe", threshold=5, client=client)
 
     params = seen[0].url.params
-    assert params["q"] == "Goethe"
+    assert params["q"] == "Johann Wolfgang von Goethe"
     assert params["format"] == "json"
     assert params["filter"] == "type:SubjectHeading OR type:Person"
+
+
+async def test_does_not_search_persons_for_a_single_word(monkeypatch):
+    monkeypatch.setattr(iri_api, "GND_TYPES", ["SubjectHeading", "Person"])
+    seen = []
+    async with _client([], seen) as client:
+        await search_gnd_best_match("Goethe", threshold=5, client=client)
+
+    assert seen[0].url.params["filter"] == "type:SubjectHeading"
+
+
+async def test_skips_the_search_when_only_persons_are_configured_and_the_keyword_is_one_word(monkeypatch):
+    monkeypatch.setattr(iri_api, "GND_TYPES", ["Person"])
+    seen = []
+    async with _client([], seen) as client:
+        assert await search_gnd_best_match("Goethe", threshold=5, client=client) is None
+
+    assert seen == []
 
 
 async def test_sends_no_filter_when_no_types_are_configured(monkeypatch):
@@ -120,6 +138,65 @@ async def test_sends_no_filter_when_no_types_are_configured(monkeypatch):
         await search_gnd_best_match("Goethe", threshold=5, client=client)
 
     assert "filter" not in seen[0].url.params
+
+
+GOETHE = {
+    "id": "https://d-nb.info/gnd/118540238",
+    "gndIdentifier": "118540238",
+    "preferredName": "Goethe, Johann Wolfgang von",
+    "variantName": ["Goethe, J. W. von", "Goethe"],
+    "type": ["AuthorityResource", "DifferentiatedPerson", "Person"],
+}
+
+
+async def test_matches_a_person_by_name_in_natural_order():
+    async with _client([GOETHE]) as client:
+        result = await search_gnd_best_match("Johann Wolfgang von Goethe", threshold=5, client=client)
+
+    assert result["iri"] == "https://d-nb.info/gnd/118540238"
+    assert result["label"] == "Goethe, Johann Wolfgang von"
+    assert result["best_term"] == "Johann Wolfgang von Goethe"
+    assert result["distance"] == 0
+    assert result["matched"] is True
+
+
+async def test_never_matches_a_person_on_a_single_word():
+    # "Goethe" is literally one of the variant names, but a single word is too ambiguous
+    other = {"id": "https://d-nb.info/gnd/1031434429", "preferredName": "Goethe-Comité", "type": ["CorporateBody"]}
+    async with _client([GOETHE, other]) as client:
+        result = await search_gnd_best_match("goethe", threshold=5, client=client)
+
+    assert result["iri"] == "https://d-nb.info/gnd/1031434429"
+    assert result["matched"] is False
+
+
+async def test_prefers_the_type_listed_first_on_equal_distance(monkeypatch):
+    monkeypatch.setattr(iri_api, "GND_TYPES", ["SubjectHeading", "PlaceOrGeographicName"])
+    place = {"id": "https://d-nb.info/gnd/1", "preferredName": "Faust", "type": ["PlaceOrGeographicName"]}
+    subject = {"id": "https://d-nb.info/gnd/2", "preferredName": "Faust", "type": ["SubjectHeading"]}
+    async with _client([place, subject]) as client:
+        result = await search_gnd_best_match("faust", threshold=5, client=client)
+
+    assert result["iri"] == "https://d-nb.info/gnd/2"
+
+
+async def test_a_closer_match_beats_a_preferred_type(monkeypatch):
+    monkeypatch.setattr(iri_api, "GND_TYPES", ["SubjectHeading", "PlaceOrGeographicName"])
+    place = {"id": "https://d-nb.info/gnd/1", "preferredName": "Weimar", "type": ["PlaceOrGeographicName"]}
+    subject = {"id": "https://d-nb.info/gnd/2", "preferredName": "Weimaraner", "type": ["SubjectHeading"]}
+    async with _client([subject, place]) as client:
+        result = await search_gnd_best_match("weimar", threshold=5, client=client)
+
+    assert result["iri"] == "https://d-nb.info/gnd/1"
+
+
+async def test_threshold_zero_only_accepts_exact_matches():
+    napoleon_satz = {"id": "https://d-nb.info/gnd/3", "preferredName": "Napoleon-Satz", "type": ["SubjectHeading"]}
+    async with _client([napoleon_satz]) as client:
+        result = await search_gnd_best_match("napoleon", threshold=0, client=client)
+
+    assert result["distance"] == 5
+    assert result["matched"] is False
 
 
 def test_pick_better_match_prefers_matched_then_distance_then_first():

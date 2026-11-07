@@ -68,3 +68,24 @@ def test_extract_iris_with_both_picks_per_keyword(real_tib_backend, monkeypatch)
     # ... while both have an exact "insulin"; on a tie TIB (the workspace's ontologies) wins.
     assert body["insulin"]["source"] == "tib"
     assert body["insulin"]["ontology_name"] == "chebi"
+
+
+def test_extract_iris_matches_persons_by_full_name_and_exact_mode_drops_prefix_matches(real_tib_backend, monkeypatch):
+    # Reported for https://de.wikipedia.org/wiki/Johann_Wolfgang_von_Goethe: single words like
+    # "napoleon" were linked to "Napoleon-Satz" (distance 5, i.e. within the default threshold).
+    monkeypatch.setattr(
+        real_tib_backend,
+        "_extract_keyword_list",
+        lambda document, bert_model=None, max_keywords=None: ["Johann Wolfgang von Goethe", "napoleon", "Weimar"],
+    )
+
+    with TestClient(real_tib_backend.app) as client:
+        response = client.post("/extract-iris", json={"document": "...", "terminology": "gnd", "max_distance": 0})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["Johann Wolfgang von Goethe"]["iri"] == "https://d-nb.info/gnd/118540238"
+    assert body["Johann Wolfgang von Goethe"]["matched"] is True
+    assert body["Weimar"]["iri"] == "https://d-nb.info/gnd/4065105-8"
+    assert body["Weimar"]["matched"] is True
+    assert body["napoleon"] is None or body["napoleon"]["matched"] is False
