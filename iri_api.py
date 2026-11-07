@@ -167,10 +167,16 @@ def hamming_distance(s1, s2):
     s2 = s2.ljust(max_len)
     return sum(el1 != el2 for el1, el2 in zip(s1.lower(), s2.lower()))
 
+# The server is there but refuses this (automated) request, which says nothing about whether the
+# IRI is dead: e.g. www.loc.gov answers every non-browser client with 403, so without this no
+# PREMIS (premis3) term could ever be linked. 405: the server doesn't allow HEAD.
+IRI_REFUSED_STATUS_CODES = {401, 403, 405, 429}
+
+
 async def check_iri_exists(iri, client: httpx.AsyncClient) -> bool:
     try:
         response = await client.head(iri, follow_redirects=True, timeout=5)
-        return response.status_code == 200
+        return response.status_code == 200 or response.status_code in IRI_REFUSED_STATUS_CODES
     except httpx.RequestError:
         return False
 

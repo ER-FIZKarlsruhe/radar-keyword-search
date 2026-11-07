@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import httpx
+import pytest
 
 from iri_api import check_iri_exists
 
@@ -28,6 +29,25 @@ async def test_returns_true_for_200_response():
 async def test_returns_false_for_non_200_response():
     async def handler(request):
         return httpx.Response(404)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        assert await check_iri_exists("https://example.org/missing", client) is False
+
+
+@pytest.mark.parametrize("status", [401, 403, 405, 429])
+async def test_returns_true_when_the_server_refuses_the_request(status):
+    # e.g. www.loc.gov (PREMIS) answers every automated client with 403
+    async def handler(request):
+        return httpx.Response(status)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        assert await check_iri_exists("http://www.loc.gov/premis/rdf/v3/Fixity", client) is True
+
+
+@pytest.mark.parametrize("status", [404, 410, 500, 503])
+async def test_returns_false_for_a_missing_iri_or_a_server_error(status):
+    async def handler(request):
+        return httpx.Response(status)
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         assert await check_iri_exists("https://example.org/missing", client) is False
