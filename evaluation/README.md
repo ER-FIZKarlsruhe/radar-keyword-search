@@ -16,6 +16,7 @@ are configured in `config.py`:
 |--------|---------|-------------|----------------|--------|
 | culture | `radar4culture` | GND + TIB (`both`) | `NFDI4CULTURE` | `multilingual-e5`, `historic-multilingual-bert` |
 | chem | `radar4chem` | TIB | `NFDI4CHEM` | `scibert`, `chemicalbert` |
+| memory | `radar4memory` | GND + TIB (`both`) | `NFDI4CULTURE` (TIB has no NFDI4Memory collection) | `multilingual-e5`, `historic-multilingual-bert` |
 
 Each model runs in two modes: **exact** (`max_distance=0`) and **fuzzy** (the service's default
 threshold), with 10 keywords. The document sent is title + abstract.
@@ -46,3 +47,9 @@ link rate, links at distance 0, closest-candidate distance, rank of linked keywo
 source and ontology, agreement with the authors' own keywords (recall/precision, matched
 case-insensitively by equality or containment), and response time. It also computes the
 keyword-list overlap (Jaccard) between every pair of runs.
+
+The HTML report opens with inline-SVG charts (`charts.py`, no external libraries, hover for
+values): link rate exact vs fuzzy, linked keywords per dataset, match distance of fuzzy links,
+link rate by KeyBERT rank, agreement with author keywords, and — when both are searched —
+GND vs TIB share. Colour always identifies the model; exact vs fuzzy is shown by hollow vs
+filled markers and dashed vs solid lines.

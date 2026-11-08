@@ -60,4 +60,13 @@ DOMAINS = {
         # General scientific encoder next to the chemistry-specific one.
         "models": ["scibert", "chemicalbert"],
     },
+    "memory": {
+        "oai_set": "radar4memory",
+        "terminology": "both",
+        # TIB has no NFDI4Memory collection; NFDI4CULTURE is the closest (history, heritage).
+        "ontology_collection": "NFDI4CULTURE",
+        # Mostly German (often with a parallel English abstract) historical texts:
+        # the multilingual sentence-embedding baseline next to the historic encoder.
+        "models": ["multilingual-e5", "historic-multilingual-bert"],
+    },
 }

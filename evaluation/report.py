@@ -30,6 +30,7 @@ from itertools import combinations
 from pathlib import Path
 from typing import Dict, List, Optional
 
+import charts
 from config import DOMAINS, REPORTS_DIR, RESULTS_DIR
 
 
@@ -75,7 +76,8 @@ def compute_stats(data: Dict) -> Dict:
     per_run = {}
     for run in runs:
         extracted, linked, exact_linked, distances, linked_ranks, elapsed = [], [], [], [], [], []
-        sources, ontologies = Counter(), Counter()
+        sources, ontologies, linked_distances = Counter(), Counter(), Counter()
+        by_rank: Dict[int, Dict[str, int]] = {}
         errors = 0
         author_total = author_found = with_author = extracted_agreeing = 0
         for ds in data["datasets"]:
@@ -94,6 +96,11 @@ def compute_stats(data: Dict) -> Dict:
             for k in linked_kws:
                 sources[k["match"]["source"]] += 1
                 ontologies[k["match"].get("ontology_name") or k["match"]["source"]] += 1
+                linked_distances[k["match"]["distance"]] += 1
+            for k in kws:
+                bucket = by_rank.setdefault(k["rank"], {"linked": 0, "total": 0})
+                bucket["total"] += 1
+                bucket["linked"] += _is_linked(k)
             if ds["author_keywords"]:
                 with_author += 1
                 author_total += len(ds["author_keywords"])
@@ -110,6 +117,9 @@ def compute_stats(data: Dict) -> Dict:
             "datasets_failed": errors,
             "keywords_per_dataset": _summary(extracted),
             "linked_per_dataset": _summary(linked),
+            "linked_per_dataset_values": linked,
+            "linked_distance_counts": {str(d): n for d, n in sorted(linked_distances.items())},
+            "linked_by_rank": {str(r): by_rank[r] for r in sorted(by_rank)},
             "exact_linked_per_dataset": _summary(exact_linked),
             "keywords_total": n_extracted,
             "linked_total": n_linked,
@@ -268,6 +278,74 @@ def _stats_table(stats: Dict) -> str:
     )
 
 
+def _charts(data: Dict, stats: Dict) -> str:
+    runs = data["runs"]
+    models = list(dict.fromkeys(r["model"] for r in runs))
+    color = {m: charts.SERIES[i % len(charts.SERIES)] for i, m in enumerate(models)}
+    by_id = stats["runs"]
+    run_of = {(r["model"], r["mode"]): r["id"] for r in runs}
+    max_kw = max([r["request"].get("max_keywords") or 10 for r in runs] + [1])
+    out = []
+
+    rows = []
+    for m in models:
+        ex, fz = by_id.get(run_of.get((m, "exact"))), by_id.get(run_of.get((m, "fuzzy")))
+        tip = lambda s, mode: f"{m} · {mode}\n{s['linked_total']} of {s['keywords_total']} keywords linked ({charts.pct(s['link_rate'])})" if s else ""  # noqa: E731
+        rows.append({"label": m, "color": color[m], "exact": ex and ex["link_rate"], "fuzzy": fz and fz["link_rate"],
+                     "exact_tip": tip(ex, "exact"), "fuzzy_tip": tip(fz, "fuzzy")})
+    out.append(charts.dumbbell(rows, "Link rate: exact vs fuzzy",
+                               "Share of all extracted keywords linked to a vocabulary term. The gap is what fuzzy matching adds."))
+
+    panels = []
+    for r in runs:
+        values = by_id[r["id"]]["linked_per_dataset_values"]
+        panels.append({"label": f"{r['model']} · {r['mode']}", "color": color[r["model"]],
+                       "counts": Counter(values), "marker": by_id[r["id"]]["linked_per_dataset"]["median"], "tip_unit": "datasets"})
+    out.append(charts.histograms(panels, list(range(0, max_kw + 1)), "Linked keywords per dataset",
+                                 "How many of each dataset's keywords got linked; line = median.", "linked keywords", "datasets"))
+
+    fuzzy_runs = [r for r in runs if r["mode"] == "fuzzy"]
+    if fuzzy_runs:
+        max_d = max([int(d) for r in fuzzy_runs for d in by_id[r["id"]]["linked_distance_counts"]] + [5])
+        panels = [{"label": f"{r['model']} · fuzzy", "color": color[r["model"]],
+                   "counts": {int(d): n for d, n in by_id[r["id"]]["linked_distance_counts"].items()},
+                   "tip_unit": "linked keywords"} for r in fuzzy_runs]
+        out.append(charts.histograms(panels, list(range(0, max_d + 1)), "Match distance of linked keywords (fuzzy)",
+                                     "Hamming distance between keyword and linked label. Everything right of 0 is a non-exact link - check these in the table below.",
+                                     "distance", "linked keywords"))
+
+    series = []
+    for r in runs:
+        points = {int(rank): (b["linked"] / b["total"], b["linked"], b["total"])
+                  for rank, b in by_id[r["id"]]["linked_by_rank"].items() if b["total"]}
+        series.append({"label": f"{r['model']} · {r['mode']}", "color": color[r["model"]], "dashed": r["mode"] == "exact", "points": points})
+    out.append(charts.lines(series, list(range(1, max_kw + 1)), "Link rate by keyword rank",
+                            "Are the most relevant keywords (rank 1) more often linkable than the tail?", "KeyBERT rank (1 = most relevant)"))
+
+    # Exact and fuzzy runs of a model extract the same keywords, so author agreement is per model.
+    groups = [("Recall", []), ("Precision", [])]
+    for m in models:
+        s = by_id.get(run_of.get((m, "fuzzy")) or run_of.get((m, "exact")))
+        a = s["author_keywords"]
+        groups[0][1].append({"label": m, "color": color[m], "value": a["recall"],
+                             "tip": f"{m}\n{a['author_keywords_found']} of {a['author_keywords_total']} author keywords found"})
+        groups[1][1].append({"label": m, "color": color[m], "value": a["precision"],
+                             "tip": f"{m}\nshare of extracted keywords agreeing with an author keyword: {charts.pct(a['precision'])}"})
+    n_author = next(iter(by_id.values()))["author_keywords"]["datasets_with_author_keywords"]
+    out.append(charts.grouped_hbars(groups, "Agreement with author keywords",
+                                    f"Over the {n_author} datasets that have author keywords (equal or contained, case-insensitive)."))
+
+    all_sources = sorted({src for s in by_id.values() for src in s["linked_by_source"]})
+    if len(all_sources) > 1:
+        palette = {"gnd": ("GND", charts.SERIES[2], False), "tib": ("TIB", charts.SERIES[3], True)}
+        categories = [palette.get(src, (src.upper(), charts.SERIES[2], False)) for src in all_sources]
+        rows = [(f"{r['model']} · {r['mode']}", {palette.get(k, (k.upper(),))[0]: v for k, v in by_id[r["id"]]["linked_by_source"].items()})
+                for r in runs]
+        out.append(charts.stacked_hbars(rows, categories, "Linked keywords by vocabulary",
+                                        "Which terminology the winning match came from."))
+    return f'<div class="charts">{"".join(out)}</div>'
+
+
 def render_html(data: Dict, stats: Dict) -> str:
     meta = data["meta"]
     runs = data["runs"]
@@ -296,7 +374,7 @@ def render_html(data: Dict, stats: Dict) -> str:
     title = f"Keyword extraction — {meta['domain']} ({meta['oai_set']})"
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{_e(title)}</title><style>{CSS}</style></head><body>
+<title>{_e(title)}</title><style>{CSS}{charts.CHART_CSS}</style></head><body>
 <h1>{_e(title)}</h1>
 <div class="meta">Service {_e(meta['service_url'])} · run {_e(meta['started'][:19])} UTC · commit {_e((meta.get('git_commit') or '')[:7])} ·
 terminology <b>{_e(domain_cfg.get('terminology'))}</b> · collection <b>{_e(domain_cfg.get('ontology_collection'))}</b> ·
@@ -304,6 +382,8 @@ max {_e(domain_cfg.get('max_keywords'))} keywords · document = {_e(meta['docume
 {ds_stats['count']} datasets, {ds_stats['with_abstract']} with abstract, {ds_stats['with_author_keywords']} with author keywords,
 median {_fmt(ds_stats['document_words']['median'])} words per document.
 Exact = max_distance 0, fuzzy = service default threshold.</div>
+<h2>Charts</h2>
+{_charts(data, stats)}
 <h2>Statistics</h2>
 {_stats_table(stats)}
 <h2>Keywords per dataset</h2>
@@ -311,7 +391,7 @@ Exact = max_distance 0, fuzzy = service default threshold.</div>
 <span style="background:var(--none)">no candidate</span>★ agrees with an author keyword · d = Hamming distance ·
 numbers are KeyBERT rank (1 = most relevant) · hover a keyword to highlight it across runs</p>
 <div class="scroll"><table><tr><th>Dataset</th>{header}</tr>{''.join(rows)}</table></div>
-<script>{JS}</script>
+<script>{JS}{charts.CHART_JS}</script>
 </body></html>"""
 
 
