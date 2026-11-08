@@ -73,10 +73,40 @@ def test_every_domain_has_at_least_two_candidate_models():
 
 def test_bert_embedding_prepends_the_registry_prefix():
     embedding = iri_api._BertEmbedding("some/model", prefix="query: ")
-    embedding(["insulin"])
+    embedding.embed(["insulin"])
 
     docs = embedding._tokenizer.call_args.args[0]
     assert docs == ["query: insulin"]
+
+
+def test_bert_embedding_hands_the_tokenizer_plain_strings_and_truncates():
+    # KeyBERT embeds its candidate words as a numpy array of numpy str_ values.
+    class FakeStr(str):
+        pass
+
+    embedding = iri_api._BertEmbedding("some/model")
+    embedding.embed((FakeStr("insulin"), FakeStr("glucose")))
+
+    call = embedding._tokenizer.call_args
+    docs = call.args[0]
+    assert docs == ["insulin", "glucose"]
+    assert type(docs) is list and all(type(d) is str for d in docs)
+    assert call.kwargs["truncation"] is True
+    assert call.kwargs["max_length"] == 512
+
+
+def test_keybert_gets_a_base_embedder_for_the_registry_model():
+    # KeyBERT only uses a custom model if it's a keybert.backend.BaseEmbedder;
+    # anything else is silently replaced by KeyBERT's own default model.
+    from keybert.backend import BaseEmbedder
+
+    iri_api._bert_model_cache.pop("scibert", None)
+    iri_api.get_bert_model("scibert")
+
+    model = iri_api.KeyBERT.call_args.kwargs["model"]
+    assert isinstance(model, BaseEmbedder)
+    assert isinstance(model, iri_api._BertEmbedding)
+    iri_api.AutoModel.from_pretrained.assert_called_with(iri_api.BERT_MODEL_REGISTRY["scibert"]["hf_model"])
 
 
 def test_extract_iris_rejects_an_unknown_model():

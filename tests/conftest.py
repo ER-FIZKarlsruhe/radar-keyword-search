@@ -36,12 +36,25 @@ than just re-importing it.
 import importlib
 import os
 import sys
+import types
 from unittest.mock import MagicMock
 
 import pytest
 
 for _module_name in ("torch", "transformers", "keybert", "openai", "numpy"):
     sys.modules[_module_name] = MagicMock()
+
+
+class BaseEmbedder:
+    """Stand-in for keybert.backend.BaseEmbedder: a real class, so iri_api can subclass it."""
+
+    def __init__(self, embedding_model=None, word_embedding_model=None):
+        self.embedding_model = embedding_model
+        self.word_embedding_model = word_embedding_model
+
+
+sys.modules["keybert.backend"] = types.ModuleType("keybert.backend")
+sys.modules["keybert.backend"].BaseEmbedder = BaseEmbedder
 
 os.environ.setdefault("EXTRACTION_BACKEND", "keybert")
 

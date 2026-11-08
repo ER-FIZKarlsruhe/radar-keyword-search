@@ -69,23 +69,38 @@ _bert_model_cache: Dict[str, object] = {}
 if EXTRACTION_BACKEND == "keybert":
     from transformers import AutoTokenizer, AutoModel
     from keybert import KeyBERT
+    from keybert.backend import BaseEmbedder
     import torch
+
+    # Position-embedding limit shared by every BERT-style model in BERT_MODEL_REGISTRY.
+    BERT_MAX_TOKENS = 512
 
     def _mean_pooling(model_output, attention_mask):
         token_embeddings = model_output[0]
         input_mask_expanded = attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
         return torch.sum(token_embeddings * input_mask_expanded, 1) / torch.clamp(input_mask_expanded.sum(1), min=1e-9)
 
-    class _BertEmbedding:
+    class _BertEmbedding(BaseEmbedder):
+        # Must subclass KeyBERT's BaseEmbedder and implement embed(): KeyBERT's
+        # select_backend() doesn't recognise any other custom object and silently
+        # falls back to its own default model (paraphrase-multilingual-MiniLM-L12-v2),
+        # which made every registry model return identical keywords.
         def __init__(self, model_name: str, prefix: str = ""):
+            super().__init__()
             self._tokenizer = AutoTokenizer.from_pretrained(model_name)
             self._model = AutoModel.from_pretrained(model_name)
             self._prefix = prefix
 
-        def __call__(self, docs, **kwargs):
-            if self._prefix:
-                docs = [self._prefix + doc for doc in docs]
-            encoded_input = self._tokenizer(docs, padding=True, truncation=True, return_tensors='pt')
+        def embed(self, docs, verbose: bool = False):
+            # KeyBERT passes the candidate words as a numpy array of str, which the
+            # tokenizer rejects - it only accepts a str or a list of str.
+            docs = [self._prefix + str(doc) for doc in docs]
+            # Explicit max_length: some checkpoints (e.g. SciBERT) don't set model_max_length,
+            # so truncation=True alone wouldn't truncate and a long abstract would overflow
+            # BERT's 512 position embeddings.
+            encoded_input = self._tokenizer(
+                docs, padding=True, truncation=True, max_length=BERT_MAX_TOKENS, return_tensors='pt'
+            )
             with torch.no_grad():
                 model_output = self._model(**encoded_input)
             embeddings = _mean_pooling(model_output, encoded_input['attention_mask'])

@@ -8,3 +8,5 @@ radar-keywords-test-env/
 .coverage
 htmlcov/
 test-results/
+evaluation/results/
+evaluation/reports/
