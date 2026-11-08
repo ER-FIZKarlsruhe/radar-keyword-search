@@ -6,8 +6,8 @@ Standard library only — no extra dependencies.
 | Step | Script | Output |
 |------|--------|--------|
 | 1. Harvest OAI-PMH metadata once | `harvest.py [domain…]` | `../../radar-keyword-eval-data/harvest/<oai_set>/page_NNNN.xml` (outside the repo) |
-| 2. Run the keyword service | `run_extraction.py [domain…] [--limit N] [--require-abstract] [--models …]` | `results/<domain>_<timestamp>.json` |
-| 3. Build reports + statistics | `report.py [result.json…]` | `reports/<name>.html`, `reports/<name>.stats.json` |
+| 2. Run the keyword service | `run_extraction.py [domain…] [--limit N] [--random [--seed S]] [--require-abstract] [--models …]` | `results/<domain>_<timestamp>.json` |
+| 3. Build reports + statistics | `report.py [result.json…] [--combined NAME]` | `reports/<name>.html`, `reports/<name>.stats.json`, with `--combined` also `reports/NAME.html` |
 
 Run them from this folder (`cd evaluation`). Domains, models, terminology and TIB collection
 are configured in `config.py`:
@@ -17,6 +17,11 @@ are configured in `config.py`:
 | culture | `radar4culture` | GND + TIB (`both`) | `NFDI4CULTURE` | `multilingual-e5`, `historic-multilingual-bert` |
 | chem | `radar4chem` | TIB | `NFDI4CHEM` | `scibert`, `chemicalbert` |
 | memory | `radar4memory` | GND + TIB (`both`) | `NFDI4CULTURE` (TIB has no NFDI4Memory collection) | `multilingual-e5`, `historic-multilingual-bert` |
+
+By default the first `--limit` datasets are used; `--random` draws `--limit` datasets at random
+instead. The seed is stored in the result (`meta.seed`); pass it again with `--seed` to repeat the
+sample. `report.py --combined NAME` additionally writes one page with an overview table across all
+given domains, followed by each domain's full report.
 
 Each model runs in two modes: **exact** (`max_distance=0`) and **fuzzy** (the service's default
 threshold), with 10 keywords. The document sent is title + abstract.

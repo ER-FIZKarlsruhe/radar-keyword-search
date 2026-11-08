@@ -27,6 +27,7 @@ from transformers import CONFIG_MAPPING, AutoModel, AutoTokenizer
 
 from bert_models import BERT_MODEL_REGISTRY
 from keyword_extraction import KeywordExtractor
+from stop_words import STOP_WORDS
 
 app = FastAPI()
 
@@ -126,6 +127,20 @@ kw_model = get_bert_model(DEFAULT_BERT_MODEL)
 # Supporting Functions
 # -------------------------------
 HAMMING_THRESHOLD = 5
+
+# A match may differ from the keyword in at most one character per this many keyword
+# characters. Without it, the fixed threshold of 5 accepted *any* term for a keyword of
+# up to 5 letters ("hier" -> "usko") and long prefix matches ("witches" -> "Witches game");
+# with it, short keywords need an exact match and only small edits ("nanoparticles" ->
+# "nanoparticle") pass.
+CHARS_PER_ALLOWED_DIFFERENCE = 4
+
+
+def allowed_distance(keyword: str, threshold: int) -> int:
+    """Largest Hamming distance at which `keyword` counts as matched: a quarter of its
+    length (rounded down), and never more than `threshold` (the request's max_distance)."""
+    return min(threshold, len(keyword.strip()) // CHARS_PER_ALLOWED_DIFFERENCE)
+
 
 def hamming_distance(s1, s2):
     max_len = max(len(s1), len(s2))
@@ -272,7 +287,10 @@ async def search_tib_best_match(keyword: str, ontology: Optional[str],  ontology
     # Only the winning candidate's IRI needs a liveness check (also cheaper than checking every
     # candidate up front, as before). A match can still be "matched" quality-wise while lacking a
     # usable link, if that one IRI doesn't resolve.
-    best_match["matched"] = best_match["distance"] <= threshold and await check_iri_exists(best_match["iri"], client)
+    best_match["matched"] = (
+        best_match["distance"] <= allowed_distance(keyword, threshold)
+        and await check_iri_exists(best_match["iri"], client)
+    )
     return best_match
 
 
@@ -401,7 +419,7 @@ async def search_gnd_best_match(keyword: str, threshold: int, client: httpx.Asyn
 
     if not best_match:
         return None
-    best_match["matched"] = best_match["distance"] <= threshold
+    best_match["matched"] = best_match["distance"] <= allowed_distance(keyword, threshold)
     return best_match
 
 
@@ -436,7 +454,7 @@ def _extract_keyword_list(document: str, bert_model: Optional[str] = None, max_k
         document,
         top_n=max_keywords,
         keyphrase_ngram_range=(1, 1),
-        stop_words='english',
+        stop_words=STOP_WORDS,
     )
     return [kw for kw, _ in keyword_scores]
 
@@ -454,8 +472,9 @@ class DocumentRequest(BaseModel):
     # apply to TIB.
     terminology: Literal["tib", "gnd", "both"] = "tib"
     # Accept a match only up to this Hamming distance; 0 = exact matches only (ignoring
-    # case). Defaults to HAMMING_THRESHOLD. Closer candidates are still reported with
-    # matched=false, so clients can show how close they were.
+    # case). Defaults to HAMMING_THRESHOLD. Shorter keywords get less (see
+    # allowed_distance). Closer candidates are still reported with matched=false, so
+    # clients can show how close they were.
     max_distance: Optional[int] = Field(default=None, ge=0, le=HAMMING_THRESHOLD)
 
 # -------------------------------

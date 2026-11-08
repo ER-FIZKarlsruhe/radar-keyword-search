@@ -22,7 +22,7 @@ IRI it returns. It needs network access to both of those, so it's kept out
 of the default `pytest` run (see pytest.ini's `testpaths = tests`).
 
 Keyword extraction itself is faked, and the ML packages it would normally
-need (torch/transformers/keyword_extraction) are stubbed out exactly like
+need (torch/transformers/keyword_extraction/stop_words) are stubbed out exactly like
 tests/conftest.py does for the fast suite - this test is about the TIB
 lookup pipeline (which only depends on httpx), not about keyword
 extraction, so it doesn't need the real ML stack installed at all.

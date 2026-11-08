@@ -141,7 +141,8 @@ curl --noproxy '*' -X POST http://localhost:8001/extract-iris \
 1. **Keyword Extraction** (`/extract-iris`):
 
    The [KeyBERT](https://github.com/MaartenGr/KeyBERT) algorithm by Maarten Grootendorst, with
-   BERT embeddings: the document's own words (minus English stop words) are ranked by cosine
+   BERT embeddings: the document's own words (minus English and German stop words, see
+   `stop_words.py`) are ranked by cosine
    similarity to the whole document. It lives in `keyword_extraction.py`, a small port of the
    code path of KeyBERT 0.9.0 that this service uses, with identical results; the `keybert`
    package itself is no longer a dependency. See [Acknowledgements](#-acknowledgements).
@@ -150,14 +151,14 @@ curl --noproxy '*' -X POST http://localhost:8001/extract-iris \
 
    * `tib` (default): each keyword is searched in the TIB Terminology API (optionally scoped by
      `ontology` / `ontology_collection`). The closest label/synonym by Hamming distance wins; it is
-     `matched` if the distance is `<= max_distance` (default 5) and its IRI isn't provably dead:
+     `matched` if the distance is within the allowed distance (see `max_distance` below) and its IRI isn't provably dead:
      only a HEAD answer of 404/410, or a host that can't be resolved or refuses the connection,
      drops the match. Other statuses and timeouts keep it, since hosts behind bot protection
      (e.g. `www.loc.gov` for PREMIS terms) answer automated requests with 403, a 503 challenge
      or by stalling. Every non-200 answer is logged.
    * `gnd`: each keyword is searched in the GND via lobid-gnd, restricted to the types in
      `GND_TYPES`. The closest preferred/variant name wins (on a tie, the type listed first in
-     `GND_TYPES`); it is `matched` if the distance is `<= max_distance` (no HEAD check - lobid only
+     `GND_TYPES`); it is `matched` if the distance is within the allowed distance (no HEAD check - lobid only
      returns live records). `ontology` and `ontology_collection` are ignored.
      * Persons are only matched for keywords of at least two words: a single word like `goethe` or
        `napoleon` would otherwise hit some person whose (variant) name is exactly that. Inverted
@@ -166,10 +167,14 @@ curl --noproxy '*' -X POST http://localhost:8001/extract-iris \
        matches currently don't occur.
    * `both`: both lookups run in parallel; a matched candidate beats an unmatched one, then the
      smaller distance wins, and on a tie TIB wins.
-   * `max_distance`: the Hamming distance pads the shorter string, so a keyword that's merely the
-     start of a longer term only costs the extra characters - `napoleon` vs. `Napoleon-Satz` is 5,
-     just within the default threshold. `"max_distance": 0` accepts exact matches only (ignoring
-     case); the closest candidate is still returned with `matched: false`.
+   * Allowed distance: a quarter of the keyword's length (rounded down), and at most
+     `max_distance` (default 5). Keywords under 4 letters need an exact match, 4–7 letters may
+     differ by 1, 8–11 by 2, and so on. This accepts small edits such as `nanoparticles` →
+     `nanoparticle` or `gluck` → `Glück`. It rejects what a fixed threshold of 5 let through:
+     any term for a short keyword (`hier` → `usko`) and a keyword plus extra words (`witches` →
+     `Witches game`; the Hamming distance pads the shorter string, so such a prefix match only
+     costs the extra characters). `"max_distance": 0` accepts exact matches only (ignoring case).
+     The closest candidate is always returned, with `matched: false` when it is too far.
    * The GND is German: English keywords from English-only models (e.g. `music`) rarely hit a GND
      heading (`Musik`) exactly. Prefer a German or multilingual model (`gbert`,
      `multilingual-e5`, ...) for German documents linked to the GND.
@@ -201,7 +206,7 @@ curl --noproxy '*' -X POST http://localhost:8001/extract-iris \
   "ontology_collection": "Optional TIB collection id(s) (e.g., NFDI4CHEM); TIB only",
   "model": "Optional BERT model name, see GET /models",
   "max_keywords": "Optional, 1-20, default 10",
-  "max_distance": "Optional, 0-5, default 5; 0 = exact matches only"
+  "max_distance": "Optional, 0-5, default 5; 0 = exact matches only; shorter keywords get less (a quarter of their length)"
 }
 ```
 
@@ -239,8 +244,8 @@ curl --noproxy '*' -X POST http://localhost:8001/extract-iris \
 }
 ```
 
-* `matched`: whether the candidate is good enough to link (distance `<= max_distance`, and for TIB a
-  live IRI).
+* `matched`: whether the candidate is good enough to link (distance within the allowed distance -
+  a quarter of the keyword's length, at most `max_distance` - and for TIB a live IRI).
   The closest candidate is returned even when it isn't, so clients can show a match-quality rating.
 * `source`: `tib` or `gnd` - which terminology the candidate came from.
 * `keyword_scheme`, `scheme_uri`, `classification_code`: ready-made values for a RADAR keyword's
@@ -388,6 +393,10 @@ KeyBERT is released under the MIT License, which allows its code to be used, mod
 redistributed within this Apache-2.0 project, provided its copyright and permission notice are
 kept. That notice is in the header of `keyword_extraction.py` and in [NOTICE](NOTICE), which is
 also shipped in the Docker image.
+
+The German stop words in `stop_words.py` are the [Snowball](https://snowballstem.org) project's
+German stop word list (Copyright (c) 2001 Dr Martin Porter, 2002 Richard Boulton), used under the
+3-clause BSD License; see [NOTICE](NOTICE).
 
 If you use this service in research, please cite KeyBERT:
 

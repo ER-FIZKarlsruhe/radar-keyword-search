@@ -16,9 +16,12 @@
 
 For each result JSON this writes REPORTS_DIR/<name>.html (one row per dataset,
 one column per model/mode run, keywords rank-aligned) and <name>.stats.json.
+With --combined NAME it also writes REPORTS_DIR/NAME.html: one page with an
+overview across all given domains, followed by each domain's full report.
 
     python evaluation/report.py                          # newest result file per domain
     python evaluation/report.py evaluation/results/chem_20261108-101500.json
+    python evaluation/report.py --combined all_domains   # newest per domain, plus one combined page
 """
 
 import argparse
@@ -346,7 +349,14 @@ def _charts(data: Dict, stats: Dict) -> str:
     return f'<div class="charts">{"".join(out)}</div>'
 
 
-def render_html(data: Dict, stats: Dict) -> str:
+def _selection(meta: Dict) -> str:
+    if meta.get("selection") == "random":
+        return f"random sample of {meta['limit']} from {meta.get('candidates', '?')} datasets (seed {meta.get('seed')})"
+    return f"first {meta.get('limit')} datasets"
+
+
+def _domain_body(data: Dict, stats: Dict, h: str = "h2") -> str:
+    """Everything below a report's title: meta line, charts, statistics, dataset table."""
     meta = data["meta"]
     runs = data["runs"]
     domain_cfg = runs[0]["request"] if runs else {}
@@ -371,31 +381,94 @@ def render_html(data: Dict, stats: Dict) -> str:
                 cells.append(f'<td><ol class="kws">{items}</ol></td>')
         rows.append(f'<tr class="row">{"".join(cells)}</tr>')
 
-    title = f"Keyword extraction — {meta['domain']} ({meta['oai_set']})"
-    return f"""<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{_e(title)}</title><style>{CSS}{charts.CHART_CSS}</style></head><body>
-<h1>{_e(title)}</h1>
-<div class="meta">Service {_e(meta['service_url'])} · run {_e(meta['started'][:19])} UTC · commit {_e((meta.get('git_commit') or '')[:7])} ·
+    return f"""<div class="meta">Service {_e(meta['service_url'])} · run {_e(meta['started'][:19])} UTC · commit {_e((meta.get('git_commit') or '')[:7])} ·
 terminology <b>{_e(domain_cfg.get('terminology'))}</b> · collection <b>{_e(domain_cfg.get('ontology_collection'))}</b> ·
 max {_e(domain_cfg.get('max_keywords'))} keywords · document = {_e(meta['document'])}<br>
-{ds_stats['count']} datasets, {ds_stats['with_abstract']} with abstract, {ds_stats['with_author_keywords']} with author keywords,
+{_e(_selection(meta))}: {ds_stats['count']} datasets, {ds_stats['with_abstract']} with abstract, {ds_stats['with_author_keywords']} with author keywords,
 median {_fmt(ds_stats['document_words']['median'])} words per document.
 Exact = max_distance 0, fuzzy = service default threshold.</div>
-<h2>Charts</h2>
+<{h}>Charts</{h}>
 {_charts(data, stats)}
-<h2>Statistics</h2>
+<{h}>Statistics</{h}>
 {_stats_table(stats)}
-<h2>Keywords per dataset</h2>
+<{h}>Keywords per dataset</{h}>
 <p class="meta legend"><span style="background:var(--ok)">linked</span><span style="background:var(--near)">candidate too far / IRI dead</span>
 <span style="background:var(--none)">no candidate</span>★ agrees with an author keyword · d = Hamming distance ·
 numbers are KeyBERT rank (1 = most relevant) · hover a keyword to highlight it across runs</p>
-<div class="scroll"><table><tr><th>Dataset</th>{header}</tr>{''.join(rows)}</table></div>
+<div class="scroll"><table><tr><th>Dataset</th>{header}</tr>{''.join(rows)}</table></div>"""
+
+
+def _page(title: str, body: str) -> str:
+    return f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{_e(title)}</title><style>{CSS}{COMBINED_CSS}{charts.CHART_CSS}</style></head><body>
+<h1>{_e(title)}</h1>
+{body}
 <script>{JS}{charts.CHART_JS}</script>
 </body></html>"""
 
 
-def build(result_path: Path) -> Path:
+def render_html(data: Dict, stats: Dict) -> str:
+    meta = data["meta"]
+    return _page(f"Keyword extraction — {meta['domain']} ({meta['oai_set']})", _domain_body(data, stats))
+
+
+COMBINED_CSS = """
+nav.toc { margin:8px 0 4px; } nav.toc a { margin-right:14px; }
+section.domain { margin-top:40px; padding-top:8px; border-top:2px solid var(--line); }
+section.domain h2 { font-size:20px; } section.domain h3 { font-size:16px; margin:28px 0 8px; }
+"""
+
+
+def _overview(items: List) -> str:
+    """One row per domain and model: the headline numbers of every domain report side by side."""
+    rows = []
+    for data, stats in items:
+        meta = data["meta"]
+        models = list(dict.fromkeys(r["model"] for r in data["runs"]))
+        by = {(r["model"], r["mode"]): stats["runs"][r["id"]] for r in data["runs"]}
+        terminology = data["runs"][0]["request"].get("terminology") if data["runs"] else ""
+        for i, m in enumerate(models):
+            ex, fz = by.get((m, "exact")), by.get((m, "fuzzy"))
+            ref = fz or ex
+            author = ref["author_keywords"]
+            domain_cell = ""
+            if i == 0:
+                domain_cell = (f'<td rowspan="{len(models)}"><a href="#{_e(meta["domain"])}">{_e(meta["domain"])}</a>'
+                               f'<br><span class="m">{stats["datasets"]["count"]} datasets · {_e(terminology)}</span></td>')
+            cells = [
+                _fmt(ex and ex["link_rate"]), _fmt(fz and fz["link_rate"]),
+                _fmt(fz and fz["linked_per_dataset"]["median"]),
+                _fmt(fz and fz["datasets_without_link"]),
+                _fmt(author["recall"]), _fmt(author["precision"]),
+                _fmt(ref["elapsed_s"]["median"]),
+                _fmt(ref["datasets_failed"]),
+            ]
+            rows.append(f"<tr>{domain_cell}<td>{_e(m)}</td>" + "".join(f'<td class="num">{_e(c)}</td>' for c in cells) + "</tr>")
+    head = ("<tr><th>Domain</th><th>Model</th><th>Link rate exact</th><th>Link rate fuzzy</th>"
+            "<th>Linked / dataset<br>(median, fuzzy)</th><th>Datasets without<br>link (fuzzy)</th>"
+            "<th>Author recall</th><th>Author precision</th><th>Response s<br>(median)</th><th>Failed</th></tr>")
+    return ('<h2>Overview</h2><p class="meta">Link rate = share of extracted keywords linked to a vocabulary term. '
+            "Author recall / precision = agreement with the datasets' own keywords (only datasets that have some). "
+            'Exact and fuzzy runs of a model extract the same keywords, so author agreement is per model.</p>'
+            f'<div class="scroll"><table class="stats">{head}{"".join(rows)}</table></div>')
+
+
+def render_combined(items: List, title: str) -> str:
+    toc = " ".join(f'<a href="#{_e(d["meta"]["domain"])}">{_e(d["meta"]["domain"])}</a>' for d, _ in items)
+    first = items[0][0]["meta"]
+    intro = (f'<div class="meta">Service {_e(first["service_url"])} · commit {_e((first.get("git_commit") or "")[:7])} · '
+             f'{_e(_selection(first))} per domain</div>')
+    sections = "".join(
+        f'<section class="domain" id="{_e(d["meta"]["domain"])}"><h2>{_e(d["meta"]["domain"])} '
+        f'<span class="m">({_e(d["meta"]["oai_set"])})</span></h2>{_domain_body(d, s, "h3")}</section>'
+        for d, s in items
+    )
+    return _page(title, f'{intro}<nav class="toc">Domains: {toc}</nav>{_overview(items)}{sections}')
+
+
+def build(result_path: Path):
+    """Write the domain's report and stats; returns (data, stats) for a combined report."""
     data = json.loads(result_path.read_text(encoding="utf-8"))
     stats = compute_stats(data)
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -403,7 +476,7 @@ def build(result_path: Path) -> Path:
     html_path.write_text(render_html(data, stats), encoding="utf-8")
     (REPORTS_DIR / f"{result_path.stem}.stats.json").write_text(json.dumps(stats, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"  {html_path}")
-    return html_path
+    return data, stats
 
 
 def newest_results() -> List[Path]:
@@ -418,12 +491,16 @@ def newest_results() -> List[Path]:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("results", nargs="*", type=Path, help="result JSON files (default: newest per domain)")
+    parser.add_argument("--combined", metavar="NAME", help="also write REPORTS_DIR/NAME.html with all given domains on one page")
     args = parser.parse_args()
     paths = args.results or newest_results()
     if not paths:
         parser.error(f"no result files in {RESULTS_DIR} - run run_extraction.py first")
-    for path in paths:
-        build(path)
+    items = [build(path) for path in paths]
+    if args.combined:
+        path = REPORTS_DIR / f"{args.combined}.html"
+        path.write_text(render_combined(items, "Keyword extraction — all domains"), encoding="utf-8")
+        print(f"  {path}")
 
 
 if __name__ == "__main__":

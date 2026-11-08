@@ -15,16 +15,19 @@
 """Run the keyword service over harvested datasets and store the results as JSON.
 
 For each domain, every configured model is run in every mode (exact / fuzzy)
-on the first --limit datasets. Output: RESULTS_DIR/<domain>_<timestamp>.json.
+on the first --limit datasets, or on --limit randomly chosen ones with
+--random. Output: RESULTS_DIR/<domain>_<timestamp>.json.
 
     python evaluation/run_extraction.py                    # all domains, first 10 datasets
     python evaluation/run_extraction.py chem --limit 50
+    python evaluation/run_extraction.py --limit 20 --random --seed 42
     python evaluation/run_extraction.py culture --require-abstract
     python evaluation/run_extraction.py culture --models gbert multilingual-e5
 """
 
 import argparse
 import json
+import random
 import subprocess
 import sys
 import time
@@ -84,11 +87,16 @@ def extract(payload: dict) -> dict:
     return result
 
 
-def run_domain(domain: str, limit: int, require_abstract: bool, models) -> Path:
+def run_domain(domain: str, limit: int, require_abstract: bool, models, seed=None) -> Path:
+    """seed=None takes the first `limit` datasets; otherwise a random sample drawn with that seed."""
     config = DOMAINS[domain]
     models = models or config["models"]
 
-    datasets = [d for d in load_datasets(config["oai_set"]) if d["abstract"] or not require_abstract][:limit]
+    candidates = [d for d in load_datasets(config["oai_set"]) if d["abstract"] or not require_abstract]
+    if seed is None:
+        datasets = candidates[:limit]
+    else:
+        datasets = random.Random(seed).sample(candidates, min(limit, len(candidates)))
     runs = []
     for model in models:
         for mode, mode_params in MODES.items():
@@ -111,6 +119,9 @@ def run_domain(domain: str, limit: int, require_abstract: bool, models) -> Path:
             "service_health": _request("GET", "/"),
             "git_commit": _git_commit(),
             "limit": limit,
+            "selection": "first" if seed is None else "random",
+            "seed": seed,
+            "candidates": len(candidates),
             "require_abstract": require_abstract,
             "document": "title + abstract",
         },
@@ -147,12 +158,15 @@ def main() -> None:
     parser.add_argument("--limit", type=int, default=10, help="number of datasets per domain (default: 10)")
     parser.add_argument("--require-abstract", action="store_true", help="skip datasets without an abstract")
     parser.add_argument("--models", nargs="+", help="override the domain's configured models")
+    parser.add_argument("--random", action="store_true", help="draw --limit datasets at random instead of the first ones")
+    parser.add_argument("--seed", type=int, help="seed for --random, to repeat a sample (default: a new random seed, stored in the result)")
     args = parser.parse_args()
+    seed = (args.seed if args.seed is not None else random.randrange(1_000_000)) if args.random else None
     unknown = set(args.domains) - set(DOMAINS)
     if unknown:
         parser.error(f"unknown domain(s): {', '.join(sorted(unknown))}")
     for domain in args.domains or DOMAINS:
-        run_domain(domain, args.limit, args.require_abstract, args.models)
+        run_domain(domain, args.limit, args.require_abstract, args.models, seed)
 
 
 if __name__ == "__main__":
