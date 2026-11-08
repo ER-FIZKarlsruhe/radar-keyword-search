@@ -18,34 +18,32 @@ from typing import Dict, Literal, Optional
 import uvicorn
 import asyncio
 import httpx
-import json
 import os
 
 from urllib.parse import quote
 
+import torch
+from transformers import CONFIG_MAPPING, AutoModel, AutoTokenizer
+
 from bert_models import BERT_MODEL_REGISTRY
+from keyword_extraction import KeywordExtractor
 
 app = FastAPI()
 
 # -------------------------------
-# Backend selection
+# Keyword extraction backend
 # -------------------------------
-# EXTRACTION_BACKEND picks which keyword-extraction model this server instance
-# uses. Only that backend's dependencies are loaded, so choosing "keyllm"
-# never downloads a BERT model, and choosing "keybert" never requires an
-# Ollama server. Which specific BERT model "keybert" serves is a separate,
-# per-request choice - see BERT_MODEL_REGISTRY below.
-VALID_BACKENDS = {"keybert", "keyllm"}
-EXTRACTION_BACKEND = os.getenv("EXTRACTION_BACKEND", "keybert").strip().lower()
-if EXTRACTION_BACKEND not in VALID_BACKENDS:
+# Keywords are extracted with BERT models only (the KeyBERT algorithm, see
+# keyword_extraction.py). The former LLM backend (EXTRACTION_BACKEND=keyllm,
+# via Ollama) was removed. A deployment that still asks for it fails at startup
+# instead of silently getting BERT keywords.
+EXTRACTION_BACKEND = "keybert"
+_requested_backend = os.getenv("EXTRACTION_BACKEND", EXTRACTION_BACKEND).strip().lower()
+if _requested_backend != EXTRACTION_BACKEND:
     raise RuntimeError(
-        f"Invalid EXTRACTION_BACKEND '{EXTRACTION_BACKEND}'. "
-        f"Must be one of: {', '.join(sorted(VALID_BACKENDS))}."
+        f"Invalid EXTRACTION_BACKEND '{_requested_backend}'. Only '{EXTRACTION_BACKEND}' is "
+        f"supported; the LLM backend 'keyllm' was removed. Unset EXTRACTION_BACKEND."
     )
-
-kw_model = None
-llm_client = None
-llm_model = None
 
 # -------------------------------
 # BERT model registry
@@ -66,110 +64,63 @@ _bert_model_cache: Dict[str, object] = {}
 # -------------------------------
 # BERT Setup (CPU only)
 # -------------------------------
-if EXTRACTION_BACKEND == "keybert":
-    from transformers import AutoTokenizer, AutoModel
-    from keybert import KeyBERT
-    from keybert.backend import BaseEmbedder
-    import torch
+# Position-embedding limit shared by every BERT-style model in BERT_MODEL_REGISTRY.
+BERT_MAX_TOKENS = 512
 
-    # Position-embedding limit shared by every BERT-style model in BERT_MODEL_REGISTRY.
-    BERT_MAX_TOKENS = 512
+def _mean_pooling(model_output, attention_mask):
+    token_embeddings = model_output[0]
+    input_mask_expanded = attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
+    return torch.sum(token_embeddings * input_mask_expanded, 1) / torch.clamp(input_mask_expanded.sum(1), min=1e-9)
 
-    def _mean_pooling(model_output, attention_mask):
-        token_embeddings = model_output[0]
-        input_mask_expanded = attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
-        return torch.sum(token_embeddings * input_mask_expanded, 1) / torch.clamp(input_mask_expanded.sum(1), min=1e-9)
+class _BertEmbedding:
+    """Mean-pooled embeddings from a BERT_MODEL_REGISTRY model; KeywordExtractor's embed function."""
 
-    class _BertEmbedding(BaseEmbedder):
-        # Must subclass KeyBERT's BaseEmbedder and implement embed(): KeyBERT's
-        # select_backend() doesn't recognise any other custom object and silently
-        # falls back to its own default model (paraphrase-multilingual-MiniLM-L12-v2),
-        # which made every registry model return identical keywords.
-        def __init__(self, model_name: str, prefix: str = ""):
-            super().__init__()
-            self._tokenizer = AutoTokenizer.from_pretrained(model_name)
-            self._model = AutoModel.from_pretrained(model_name)
-            self._prefix = prefix
+    def __init__(self, model_name: str, prefix: str = "", model_type: Optional[str] = None):
+        # model_type is only set for older checkpoints whose config.json doesn't name their
+        # architecture (see bert_models.py): their config is then loaded with that type's
+        # config class, and both Auto classes pick the tokenizer/model from it.
+        kwargs = {}
+        if model_type:
+            kwargs["config"] = CONFIG_MAPPING[model_type].from_pretrained(model_name)
+        self._tokenizer = AutoTokenizer.from_pretrained(model_name, **kwargs)
+        self._model = AutoModel.from_pretrained(model_name, **kwargs)
+        self._prefix = prefix
 
-        def embed(self, docs, verbose: bool = False):
-            # KeyBERT passes the candidate words as a numpy array of str, which the
-            # tokenizer rejects - it only accepts a str or a list of str.
-            docs = [self._prefix + str(doc) for doc in docs]
-            # Explicit max_length: some checkpoints (e.g. SciBERT) don't set model_max_length,
-            # so truncation=True alone wouldn't truncate and a long abstract would overflow
-            # BERT's 512 position embeddings.
-            encoded_input = self._tokenizer(
-                docs, padding=True, truncation=True, max_length=BERT_MAX_TOKENS, return_tensors='pt'
-            )
-            with torch.no_grad():
-                model_output = self._model(**encoded_input)
-            embeddings = _mean_pooling(model_output, encoded_input['attention_mask'])
-            return embeddings.cpu().numpy()
+    def embed(self, docs):
+        # KeywordExtractor passes the candidate words as a numpy array of str, which the
+        # tokenizer rejects - it only accepts a str or a list of str.
+        docs = [self._prefix + str(doc) for doc in docs]
+        # Explicit max_length: some checkpoints (e.g. SciBERT) don't set model_max_length,
+        # so truncation=True alone wouldn't truncate and a long abstract would overflow
+        # BERT's 512 position embeddings.
+        encoded_input = self._tokenizer(
+            docs, padding=True, truncation=True, max_length=BERT_MAX_TOKENS, return_tensors='pt'
+        )
+        with torch.no_grad():
+            model_output = self._model(**encoded_input)
+        embeddings = _mean_pooling(model_output, encoded_input['attention_mask'])
+        return embeddings.cpu().numpy()
 
-    def get_bert_model(model_key: str) -> "KeyBERT":
-        """Return the KeyBERT instance for model_key, loading and caching it on first use."""
-        if model_key not in BERT_MODEL_REGISTRY:
-            raise ValueError(
-                f"Unknown BERT model '{model_key}'. "
-                f"Must be one of: {', '.join(sorted(BERT_MODEL_REGISTRY))}."
-            )
-        if model_key not in _bert_model_cache:
-            entry = BERT_MODEL_REGISTRY[model_key]
-            hf_model = entry["hf_model"]
-            print(f"Loading BERT model '{model_key}' ({hf_model})...")
-            _bert_model_cache[model_key] = KeyBERT(
-                model=_BertEmbedding(hf_model, entry.get("prefix", ""))
-            )
-        return _bert_model_cache[model_key]
+def get_bert_model(model_key: str) -> "KeywordExtractor":
+    """Return the KeywordExtractor for model_key, loading and caching it on first use."""
+    if model_key not in BERT_MODEL_REGISTRY:
+        raise ValueError(
+            f"Unknown BERT model '{model_key}'. "
+            f"Must be one of: {', '.join(sorted(BERT_MODEL_REGISTRY))}."
+        )
+    if model_key not in _bert_model_cache:
+        entry = BERT_MODEL_REGISTRY[model_key]
+        hf_model = entry["hf_model"]
+        print(f"Loading BERT model '{model_key}' ({hf_model})...")
+        _bert_model_cache[model_key] = KeywordExtractor(
+            _BertEmbedding(hf_model, entry.get("prefix", ""), entry.get("model_type")).embed
+        )
+    return _bert_model_cache[model_key]
 
-    # Eagerly load the default model at startup so the first request isn't
-    # slowed down by an on-demand load. Non-default models are loaded lazily,
-    # the first time a request asks for them.
-    kw_model = get_bert_model(DEFAULT_BERT_MODEL)
-
-# -------------------------------
-# LLM Setup: Ollama
-# -------------------------------
-# Ollama exposes an OpenAI-compatible chat API. This talks to it directly
-# with the `openai` client rather than through KeyBERT's KeyLLM/OpenAI
-# wrapper: KeyLLM's extract_keywords() always does a naive
-# response.choices[0].message.content.split(",") on the raw reply, so a chat
-# model that ignores the "respond with ONLY the keywords" instruction and
-# answers conversationally (e.g. "Sure! Here are the keywords: ...") leaks
-# its lead-in/sign-off sentences through as bogus keywords - no prompt
-# wording closed that gap completely. Requesting response_format=
-# {"type": "json_object"} instead constrains the model's output to valid
-# JSON via grammar-constrained decoding, so there's no free-form prose left
-# for a leak to hide in, and parsing it doesn't depend on the model
-# following an informal "separated by commas" instruction at all.
-elif EXTRACTION_BACKEND == "keyllm":
-    import openai
-
-    OLLAMA_KEYWORD_EXTRACTION_SYSTEM_PROMPT = (
-        "You extract keywords from text. Respond with ONLY a JSON object of the exact "
-        'shape {"keywords": ["keyword1", "keyword2", ...]} and nothing else - no '
-        "commentary, explanations, or introductory phrases."
-    )
-
-    OLLAMA_KEYWORD_EXTRACTION_PROMPT = """I have the following document:
-[DOCUMENT]
-
-Extract at most [MAX_KEYWORDS] keywords that best describe the topic of the text.
-Respond with a JSON object of the exact shape {"keywords": ["keyword1", "keyword2", ...]}."""
-
-    base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
-    llm_model = os.getenv("OLLAMA_MODEL", "llama3")
-    # Ollama doesn't check the API key, but the OpenAI client requires one.
-    # Ollama is typically local/internal, and by default the openai client's
-    # httpx transport honours HTTP_PROXY/HTTPS_PROXY/NO_PROXY from the
-    # environment - on a machine behind a corporate proxy, that can route
-    # these requests through the proxy and break them. So by default we
-    # bypass any such proxy entirely; set OLLAMA_HTTP_PROXY to route through
-    # a specific proxy instead (e.g. if Ollama itself is only reachable
-    # through one).
-    ollama_proxy = os.getenv("OLLAMA_HTTP_PROXY")
-    ollama_http_client = httpx.Client(proxy=ollama_proxy) if ollama_proxy else httpx.Client(trust_env=False)
-    llm_client = openai.OpenAI(api_key="ollama", base_url=base_url, http_client=ollama_http_client)
+# Eagerly load the default model at startup so the first request isn't
+# slowed down by an on-demand load. Non-default models are loaded lazily,
+# the first time a request asks for them.
+kw_model = get_bert_model(DEFAULT_BERT_MODEL)
 
 # -------------------------------
 # Supporting Functions
@@ -473,53 +424,21 @@ async def _none() -> None:
 
 DEFAULT_MAX_KEYWORDS = 10
 
-def _extract_keywords_via_ollama(document: str, max_keywords: int = DEFAULT_MAX_KEYWORDS) -> list:
-    """Extract keywords from the configured Ollama chat model as a JSON array.
-
-    Calls the OpenAI-compatible client directly with
-    response_format={"type": "json_object"} instead of going through
-    KeyBERT's KeyLLM (see the module-level comment above the Ollama setup for
-    why): the model can't leak conversational prose through the result
-    because it's constrained to emit valid JSON in the first place.
-
-    max_keywords is only a best-effort instruction to the chat model (unlike
-    KeyBERT's top_n, nothing here can force an exact count), so the result is
-    still truncated afterwards to honour the caller's limit.
-    """
-    prompt = OLLAMA_KEYWORD_EXTRACTION_PROMPT.replace("[DOCUMENT]", document).replace(
-        "[MAX_KEYWORDS]", str(max_keywords)
-    )
-    response = llm_client.chat.completions.create(
-        model=llm_model,
-        messages=[
-            {"role": "system", "content": OLLAMA_KEYWORD_EXTRACTION_SYSTEM_PROMPT},
-            {"role": "user", "content": prompt},
-        ],
-        response_format={"type": "json_object"},
-    )
-    parsed = json.loads(response.choices[0].message.content)
-    keywords = parsed.get("keywords", []) if isinstance(parsed, dict) else []
-    return [str(kw).strip() for kw in keywords if str(kw).strip()][:max_keywords]
-
 def _extract_keyword_list(document: str, bert_model: Optional[str] = None, max_keywords: int = DEFAULT_MAX_KEYWORDS) -> list:
-    """Extract a flat list of candidate keywords using the active backend.
+    """Extract a flat list of keywords, most relevant first.
 
-    bert_model selects a specific BERT_MODEL_REGISTRY entry for the "keybert"
-    backend; it's ignored (and meaningless) for "keyllm". max_keywords caps how
-    many keywords are returned; there may be fewer if the document doesn't
-    yield that many candidates.
+    bert_model selects a specific BERT_MODEL_REGISTRY entry (default:
+    DEFAULT_BERT_MODEL). max_keywords caps how many keywords are returned;
+    there may be fewer if the document doesn't yield that many candidates.
     """
-    if EXTRACTION_BACKEND == "keybert":
-        model = get_bert_model(bert_model or DEFAULT_BERT_MODEL)
-        keyword_scores = model.extract_keywords(
-            document,
-            keyphrase_ngram_range=(1, 1),
-            stop_words='english',
-            top_n=max_keywords
-        )
-        return [kw for kw, _ in keyword_scores]
-
-    return _extract_keywords_via_ollama(document, max_keywords)
+    model = get_bert_model(bert_model or DEFAULT_BERT_MODEL)
+    keyword_scores = model.extract_keywords(
+        document,
+        top_n=max_keywords,
+        keyphrase_ngram_range=(1, 1),
+        stop_words='english',
+    )
+    return [kw for kw, _ in keyword_scores]
 
 # -------------------------------
 # Request Schema
@@ -547,23 +466,14 @@ async def extract_iris(req: DocumentRequest) -> Dict[str, Optional[Dict]]:
     try:
         print(f"Received request: {req}")
 
-        if req.model:
-            if EXTRACTION_BACKEND != "keybert":
-                raise HTTPException(
-                    status_code=400,
-                    detail=(
-                        f"'model' is only supported when EXTRACTION_BACKEND=keybert "
-                        f"(current backend: '{EXTRACTION_BACKEND}')."
-                    ),
-                )
-            if req.model not in BERT_MODEL_REGISTRY:
-                raise HTTPException(
-                    status_code=400,
-                    detail=(
-                        f"Unknown BERT model '{req.model}'. "
-                        f"Must be one of: {', '.join(sorted(BERT_MODEL_REGISTRY))}."
-                    ),
-                )
+        if req.model and req.model not in BERT_MODEL_REGISTRY:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Unknown BERT model '{req.model}'. "
+                    f"Must be one of: {', '.join(sorted(BERT_MODEL_REGISTRY))}."
+                ),
+            )
 
         keyword_list = _extract_keyword_list(req.document, req.model, req.max_keywords or DEFAULT_MAX_KEYWORDS)
         print(f"Extracted keywords: {keyword_list}")
@@ -594,11 +504,7 @@ async def extract_iris(req: DocumentRequest) -> Dict[str, Optional[Dict]]:
 
 @app.get("/models")
 async def list_models():
-    """List the BERT models available for /extract-iris's `model` parameter.
-
-    Only meaningful when EXTRACTION_BACKEND=keybert; returned regardless so
-    clients can discover what switching backends would offer.
-    """
+    """List the BERT models available for /extract-iris's `model` parameter."""
     return {
         "backend": EXTRACTION_BACKEND,
         "default_model": DEFAULT_BERT_MODEL,
@@ -625,7 +531,7 @@ async def health_check():
         "status": "ok",
         "service": "radar keyword service",
         "backend": EXTRACTION_BACKEND,
-        "default_bert_model": DEFAULT_BERT_MODEL if EXTRACTION_BACKEND == "keybert" else None,
+        "default_bert_model": DEFAULT_BERT_MODEL,
         "message": "Service is online",
     }
 

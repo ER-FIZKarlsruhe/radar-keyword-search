@@ -18,17 +18,14 @@ Real end-to-end test of the TIB Terminology Service integration.
 Unlike tests/test_endpoints.py (which fakes search_tib_best_match so the fast
 suite never needs network access), this sends actual requests to the real
 https://api.terminology.tib.eu API and does a real HEAD request against the
-IRI it returns. It needs network access to both of those, so - like the
-keyllm backend test in this directory - it's kept out of the default `pytest`
-run (see pytest.ini's `testpaths = tests`).
+IRI it returns. It needs network access to both of those, so it's kept out
+of the default `pytest` run (see pytest.ini's `testpaths = tests`).
 
 Keyword extraction itself is faked, and the ML packages it would normally
-need (torch/transformers/keybert/openai) are stubbed out exactly like
+need (torch/transformers/keyword_extraction) are stubbed out exactly like
 tests/conftest.py does for the fast suite - this test is about the TIB
-lookup pipeline (which only depends on httpx), not about any particular
-extraction backend, so it doesn't need the real ML stack installed at all.
-The stubs are swapped back out afterwards so they don't leak into
-test_keyllm_backend.py, which needs the real packages.
+lookup pipeline (which only depends on httpx), not about keyword
+extraction, so it doesn't need the real ML stack installed at all.
 """
 from fastapi.testclient import TestClient
 

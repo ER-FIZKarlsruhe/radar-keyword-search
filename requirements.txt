@@ -1,77 +1,82 @@
-# PubMedBERT (iri_api.py) only ever runs on CPU (torch.no_grad + .cpu()),
-# so torch/torchvision/torchaudio are pulled from PyTorch's CPU-only wheel
-# index below instead of PyPI - that skips the ~5GB of nvidia-cu12-* CUDA
-# packages that the default GPU wheels drag in.
+# Locked dependencies for the service image (docker/dockerfile, Python 3.14).
+# Resolved with `pip install --only-binary=:all:` in python:3.14-slim and
+# frozen with `pip freeze`, so every package has a prebuilt wheel there.
+#
+# The BERT models (iri_api.py) only ever run on CPU (torch.no_grad + .cpu()),
+# so torch is pulled from PyTorch's CPU-only wheel index below instead of
+# PyPI - that skips the ~5GB of nvidia-* CUDA packages that the default GPU
+# wheels drag in.
 --extra-index-url https://download.pytorch.org/whl/cpu
 
-annotated-types==0.7.0
-anyio==4.14.2
-certifi==2026.10.18
-charset-normalizer==3.4.2
-click==8.2.1
-distro==1.9.0
-dnspython==2.7.0
-email_validator==2.2.0
-fastapi==0.115.14
-fastapi-cli==0.0.7
-filelock==3.18.0
-fsspec==2025.5.1
+annotated-doc==0.0.5
+annotated-types==0.8.0
+anyio==4.16.0
+certifi==2026.10.23
+charset-normalizer==3.5.2
+click==8.5.1
+cloudpickle==3.1.2
+dnspython==2.9.2
+email-validator==2.3.0
+fastapi==0.162.2
+fastapi-cli==0.0.32
+filelock==4.2.9
+fsspec==2026.9.0
 h11==0.16.0
-hf-xet==1.1.5
+hf-xet==1.8.0
 httpcore==1.0.9
-httptools==0.6.4
+httpcore2==2.16.0
+httptools==0.9.0
 httpx==0.28.1
-huggingface-hub==0.33.1
-idna==3.10
+httpx2==2.16.0
+huggingface_hub==2.4.0
+idna==3.20
 itsdangerous==2.2.0
 Jinja2==3.1.6
-jiter==0.10.0
-joblib==1.5.1
-keybert==0.9.0
-markdown-it-py==3.0.0
-MarkupSafe==3.0.2
+joblib==1.6.0
+markdown-it-py==4.2.0
+MarkupSafe==3.0.4
 mdurl==0.1.2
-meta==1.0.2
 mpmath==1.3.0
-networkx==3.5
-numpy==1.26.4
-openai==1.98.0
-orjson==3.10.18
-packaging==25.0
-pillow==13.0.0
-psutil==7.0.0
+narwhals==2.28.0
+networkx==3.7
+numpy==2.5.4
+opentelemetry-api==1.45.2
+orjson==3.13.0
+packaging==26.3
+psutil==7.2.2
 py-cpuinfo==9.0.0
-pydantic==2.11.7
-pydantic-extra-types==2.10.5
-pydantic-settings==2.10.1
-pydantic_core==2.33.2
-Pygments==2.19.2
-python-dotenv==1.1.1
-python-multipart==0.0.20
-PyYAML==6.0.2
-regex==2024.11.6
-requests==2.32.4
-rich==14.0.0
-rich-toolkit==0.14.7
-safetensors==0.5.3
-scikit-learn==1.7.0
-scipy==1.16.0
-sentence-transformers==5.6.0
+pydantic==2.14.3
+pydantic-extra-types==2.11.1
+pydantic-settings==2.16.2
+pydantic_core==2.50.4
+Pygments==2.21.0
+python-dotenv==1.2.4
+python-multipart==0.0.33
+PyYAML==6.0.3
+regex==2026.11.7
+requests==2.34.2
+rich==15.0.0
+rich-toolkit==0.20.6
+safetensors==0.8.0
+scikit-learn==1.9.1
+scipy==1.18.1
+setuptools==84.2.1
 shellingham==1.5.4
 sniffio==1.3.1
-starlette==0.46.2
+starlette==1.10.0
 sympy==1.14.0
-threadpoolctl==3.6.0
-tokenizers==0.21.2
-torch==2.7.1+cpu
-tqdm==4.67.1
-transformers==4.52.4
-typer==0.16.0
-typing-inspection==0.4.1
-typing_extensions==4.14.0
-ujson==5.10.0
-urllib3==2.5.0
-uvicorn==0.34.3
-uvloop==0.21.0
-watchfiles==1.1.0
-websockets==15.0.1
+threadpoolctl==3.8.0
+tokenizers==0.23.3
+torch==2.13.0+cpu
+tqdm==4.70.1
+transformers==5.22.2
+truststore==0.10.5
+typer==0.28.0
+typing-inspection==0.4.5
+typing_extensions==4.16.0
+ujson==6.1.0
+urllib3==2.8.0
+uvicorn==0.54.0
+uvloop==0.23.0
+watchfiles==1.3.0
+websockets==17.4

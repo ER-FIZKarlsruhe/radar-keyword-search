@@ -80,7 +80,7 @@ def test_bert_embedding_prepends_the_registry_prefix():
 
 
 def test_bert_embedding_hands_the_tokenizer_plain_strings_and_truncates():
-    # KeyBERT embeds its candidate words as a numpy array of numpy str_ values.
+    # KeywordExtractor embeds its candidate words as a numpy array of numpy str_ values.
     class FakeStr(str):
         pass
 
@@ -95,18 +95,32 @@ def test_bert_embedding_hands_the_tokenizer_plain_strings_and_truncates():
     assert call.kwargs["max_length"] == 512
 
 
-def test_keybert_gets_a_base_embedder_for_the_registry_model():
-    # KeyBERT only uses a custom model if it's a keybert.backend.BaseEmbedder;
-    # anything else is silently replaced by KeyBERT's own default model.
-    from keybert.backend import BaseEmbedder
-
+def test_keyword_extractor_embeds_with_the_registry_model():
     iri_api._bert_model_cache.pop("scibert", None)
     iri_api.get_bert_model("scibert")
 
-    model = iri_api.KeyBERT.call_args.kwargs["model"]
-    assert isinstance(model, BaseEmbedder)
-    assert isinstance(model, iri_api._BertEmbedding)
+    embed = iri_api.KeywordExtractor.call_args.args[0]
+    assert isinstance(embed.__self__, iri_api._BertEmbedding)
     iri_api.AutoModel.from_pretrained.assert_called_with(iri_api.BERT_MODEL_REGISTRY["scibert"]["hf_model"])
+
+
+def test_bert_embedding_loads_an_explicit_config_for_checkpoints_without_a_model_type():
+    # Older checkpoints (e.g. deepset/gbert-base) don't name their architecture in
+    # config.json, which transformers >= 5 needs to pick the tokenizer and model.
+    iri_api.CONFIG_MAPPING.__getitem__.reset_mock()
+    iri_api._BertEmbedding("deepset/gbert-base", model_type="bert")
+
+    iri_api.CONFIG_MAPPING.__getitem__.assert_called_with("bert")
+    config = iri_api.CONFIG_MAPPING["bert"].from_pretrained.return_value
+    assert iri_api.AutoTokenizer.from_pretrained.call_args.kwargs == {"config": config}
+    assert iri_api.AutoModel.from_pretrained.call_args.kwargs == {"config": config}
+
+
+def test_bert_embedding_lets_transformers_read_the_config_by_default():
+    iri_api._BertEmbedding("allenai/scibert_scivocab_uncased")
+
+    assert iri_api.AutoTokenizer.from_pretrained.call_args.kwargs == {}
+    assert iri_api.AutoModel.from_pretrained.call_args.kwargs == {}
 
 
 def test_extract_iris_rejects_an_unknown_model():
@@ -120,22 +134,9 @@ def test_extract_iris_rejects_an_unknown_model():
     assert "Unknown BERT model" in response.json()["detail"]
 
 
-def test_extract_iris_rejects_a_model_param_when_backend_is_keyllm(load_backend):
-    mod = load_backend("keyllm")
-
-    with _client(mod) as client:
-        response = client.post(
-            "/extract-iris",
-            json={"document": "insulin study", "model": "biobert"},
-        )
-
-    assert response.status_code == 400
-    assert "EXTRACTION_BACKEND=keybert" in response.json()["detail"]
-
-
 def test_extract_iris_loads_a_non_default_model_only_once(monkeypatch):
     iri_api.kw_model.extract_keywords.return_value = [("insulin", 0.9)]
-    calls_before = iri_api.KeyBERT.call_count
+    calls_before = iri_api.KeywordExtractor.call_count
 
     async def fake_search(keyword, ontology, ontology_collection, threshold, client):
         return None
@@ -150,13 +151,13 @@ def test_extract_iris_loads_a_non_default_model_only_once(monkeypatch):
             )
             assert response.status_code == 200
 
-    # One new KeyBERT instance for "biobert", cached and reused on the 2nd call.
-    assert iri_api.KeyBERT.call_count == calls_before + 1
+    # One new KeywordExtractor for "biobert", cached and reused on the 2nd call.
+    assert iri_api.KeywordExtractor.call_count == calls_before + 1
     assert "biobert" in iri_api._bert_model_cache
 
 
-def test_invalid_default_bert_model_raises_at_import_time(load_backend):
+def test_invalid_default_bert_model_raises_at_import_time(reload_iri_api):
     import pytest
 
     with pytest.raises(RuntimeError, match="Invalid BERT_MODEL"):
-        load_backend("keybert", BERT_MODEL="not-a-real-model")
+        reload_iri_api(BERT_MODEL="not-a-real-model")

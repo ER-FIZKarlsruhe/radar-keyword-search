@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Alternative embedding models the "keybert" backend in iri_api.py can
+# Embedding models iri_api.py can
 # serve, selectable per-request via DocumentRequest.model. They're all
 # transformer encoders loaded through the same AutoTokenizer/AutoModel +
 # mean-pooling path, so adding a new one only means adding an entry here.
@@ -30,6 +30,9 @@
 #     so shared checkpoints like SciBERT aren't duplicated (or loaded twice).
 #   - "prefix" (optional): text prepended to every input, for models trained
 #     with one (E5 expects "query: " for symmetric similarity tasks).
+#   - "model_type" (optional): the architecture, for older checkpoints whose
+#     config.json doesn't name it. transformers >= 5 no longer guesses it from
+#     the repo name, so loading those fails without this.
 # Every domain has at least two candidates. Domain picks are based on training
 # corpus, not on measured keyword-extraction quality.
 BERT_MODEL_REGISTRY = {
@@ -65,6 +68,7 @@ BERT_MODEL_REGISTRY = {
     },
     "gbert": {
         "hf_model": "deepset/gbert-base",
+        "model_type": "bert",
         "label": "German texts (general)",
         "kind": "masked-lm",
         "languages": ["de"],
@@ -103,6 +107,7 @@ BERT_MODEL_REGISTRY = {
     # Engineering / NFDI4Ing
     "patentbert": {
         "hf_model": "anferico/bert-for-patents",
+        "model_type": "bert",
         "label": "Engineering (patents and technology)",
         "kind": "masked-lm",
         "languages": ["en"],
@@ -118,6 +123,7 @@ BERT_MODEL_REGISTRY = {
     # Biology / NFDI4Biodiversity, DataPLANT
     "biobert": {
         "hf_model": "dmis-lab/biobert-base-cased-v1.1",
+        "model_type": "bert",
         "label": "Biology (life sciences)",
         "kind": "masked-lm",
         "languages": ["en"],
@@ -157,6 +163,7 @@ BERT_MODEL_REGISTRY = {
     # that one is a sentiment classifier under a non-commercial licence.
     "finbert": {
         "hf_model": "yiyanghkust/finbert-pretrain",
+        "model_type": "bert",
         "label": "Economics (financial and business texts)",
         "kind": "masked-lm",
         "languages": ["en"],

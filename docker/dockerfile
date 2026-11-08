@@ -2,7 +2,7 @@
 # (every dependency ships a prebuilt wheel for this image, so no compiler
 # toolchain is needed here; add build-essential if a future dependency
 # needs one)
-FROM python:3.11-slim AS builder
+FROM python:3.14-slim AS builder
 
 ARG HTTP_PROXY
 ARG HTTPS_PROXY
@@ -20,14 +20,14 @@ RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
 # ---- Runtime stage: just the venv + app code, no compilers, no proxy env ----
-FROM python:3.11-slim
+FROM python:3.14-slim
 
 WORKDIR /app
 
 COPY --from=builder /opt/venv /opt/venv
 ENV PATH="/opt/venv/bin:${PATH}"
 
-COPY iri_api.py bert_models.py ./
+COPY iri_api.py bert_models.py keyword_extraction.py LICENSE NOTICE ./
 
 RUN useradd --system --create-home appuser
 USER appuser

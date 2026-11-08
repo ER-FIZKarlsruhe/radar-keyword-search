@@ -15,87 +15,71 @@
 """
 Shared test setup.
 
-iri_api.py picks its extraction backend (keybert / keyllm) from
-the EXTRACTION_BACKEND env var *at import time*, and loads a real PubMedBERT
-model or a real OpenAI client accordingly. None of that is desirable in a
-test run: we don't want tests to require a GPU, download a model, need
-network access, or need a running Ollama server.
+iri_api.py loads a real BERT model (via torch/transformers) *at import time*.
+That is not desirable in a test run: we don't want tests to require model
+downloads or network access.
 
 So before iri_api is imported, we replace the heavy ML packages it depends on
-(torch, transformers, keybert, openai) with plain MagicMock stand-ins. Every
-attribute access / call on a MagicMock just returns another MagicMock, so all
-of the module-level setup code in iri_api.py (model loading, client
-construction, etc.) runs without error. Individual tests then configure the
-specific mock methods they need (e.g. `iri_api.kw_model.extract_keywords.
-return_value = ...`).
+(torch, transformers) with plain MagicMock stand-ins, along with
+keyword_extraction (which needs numpy/scikit-learn; it has its own real
+tests in test_keyword_extraction.py). Every attribute access / call on a
+MagicMock just returns another MagicMock, so all of the module-level setup
+code in iri_api.py (model loading etc.) runs without error. Individual tests
+then configure the specific mock methods they need (e.g.
+`iri_api.kw_model.extract_keywords.return_value = ...`).
 
-Because the backend is chosen at *import* time, switching backends between
-tests requires reloading the module (see the `load_backend` fixture) rather
-than just re-importing it.
+Because configuration is read at *import* time, testing a different
+configuration requires reloading the module (see the `reload_iri_api`
+fixture) rather than just re-importing it.
 """
 import importlib
 import os
 import sys
-import types
 from unittest.mock import MagicMock
 
 import pytest
 
-for _module_name in ("torch", "transformers", "keybert", "openai", "numpy"):
+for _module_name in ("torch", "transformers", "keyword_extraction"):
     sys.modules[_module_name] = MagicMock()
 
-
-class BaseEmbedder:
-    """Stand-in for keybert.backend.BaseEmbedder: a real class, so iri_api can subclass it."""
-
-    def __init__(self, embedding_model=None, word_embedding_model=None):
-        self.embedding_model = embedding_model
-        self.word_embedding_model = word_embedding_model
-
-
-sys.modules["keybert.backend"] = types.ModuleType("keybert.backend")
-sys.modules["keybert.backend"].BaseEmbedder = BaseEmbedder
-
-os.environ.setdefault("EXTRACTION_BACKEND", "keybert")
+# scipy (used by the real scikit-learn in test_keyword_extraction.py) checks
+# whether arrays are torch tensors whenever "torch" is already imported, via
+# issubclass(..., torch.Tensor) - which needs a real class, not a MagicMock.
+sys.modules["torch"].Tensor = type("Tensor", (), {})
 
 import iri_api  # noqa: E402  (must be imported after the stubs above)
 
 
 @pytest.fixture
-def load_backend(monkeypatch):
-    """Reload iri_api with a specific EXTRACTION_BACKEND (and other env vars).
+def reload_iri_api(monkeypatch):
+    """Reload iri_api with the given env vars set.
 
-    Usage: `mod = load_backend("keyllm", OLLAMA_MODEL="mistral")`
+    Usage: `mod = reload_iri_api(BERT_MODEL="scibert")`
     """
     extra_keys = set()
 
-    def _load(backend, **env):
-        monkeypatch.setenv("EXTRACTION_BACKEND", backend)
+    def _load(**env):
         for key, value in env.items():
             monkeypatch.setenv(key, value)
             extra_keys.add(key)
         importlib.reload(iri_api)
         # MagicMock memoizes call_args/return_value/side_effect on the
-        # stubbed keybert/openai modules, so the "new" kw_model/llm_client
+        # stubbed keyword_extraction module, so the "new" kw_model
         # created by this reload can actually be the *same* mock object a
         # previous test configured. Start every reload from a clean slate.
-        if iri_api.kw_model is not None:
-            iri_api.kw_model.extract_keywords.reset_mock(return_value=True, side_effect=True)
-        if iri_api.llm_client is not None:
-            iri_api.llm_client.chat.completions.create.reset_mock(return_value=True, side_effect=True)
+        iri_api.kw_model.extract_keywords.reset_mock(return_value=True, side_effect=True)
         return iri_api
 
     yield _load
 
-    # Clear any extra env vars a test passed in before restoring the default
-    # keybert backend: monkeypatch only undoes them once this fixture (and
+    # Clear any env vars a test passed in before restoring the default
+    # configuration: monkeypatch only undoes them once this fixture (and
     # this reload) has finished, so a value that fails module-level
     # validation (e.g. an invalid BERT_MODEL) would otherwise still be set
     # here and break this restoring reload too, leaving iri_api broken for
     # every test that runs after this one.
     for key in extra_keys:
         monkeypatch.delenv(key, raising=False)
-    monkeypatch.setenv("EXTRACTION_BACKEND", "keybert")
     importlib.reload(iri_api)
 
 
@@ -103,7 +87,4 @@ def load_backend(monkeypatch):
 def _reset_ml_mocks():
     """Ensure mock configuration from one test never leaks into the next."""
     yield
-    if iri_api.kw_model is not None:
-        iri_api.kw_model.extract_keywords.reset_mock(return_value=True, side_effect=True)
-    if iri_api.llm_client is not None:
-        iri_api.llm_client.chat.completions.create.reset_mock(return_value=True, side_effect=True)
+    iri_api.kw_model.extract_keywords.reset_mock(return_value=True, side_effect=True)

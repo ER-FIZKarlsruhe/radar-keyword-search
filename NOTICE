@@ -1,0 +1,60 @@
+radar-keyword-search
+Copyright 2025-2026 FIZ Karlsruhe - Leibniz-Institut für Informationsinfrastruktur GmbH
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+-------------------------------------------------------------------------------
+Third-party software: KeyBERT
+-------------------------------------------------------------------------------
+
+The keyword extraction in keyword_extraction.py is derived from KeyBERT by
+Maarten P. Grootendorst (https://github.com/MaartenGr/KeyBERT, version 0.9.0,
+file keybert/_model.py). The algorithm is KeyBERT's: the document's candidate
+words are ranked by the cosine similarity of their embeddings to the
+embedding of the whole document. Our port contains only the code path this
+service uses and gives the same results as keybert 0.9.0.
+
+KeyBERT is licensed under the MIT License. The MIT License is a permissive
+license that allows its code to be used, modified and redistributed, also as
+part of software under a different license such as Apache-2.0, provided the
+copyright notice and permission notice below are kept with it. The derived
+portions keep that notice and remain available under the MIT License.
+
+If you use this service in research, please also cite KeyBERT:
+
+  Maarten Grootendorst. KeyBERT: Minimal keyword extraction with BERT.
+  Zenodo, 2020. https://doi.org/10.5281/zenodo.4461265
+
+  @misc{grootendorst2020keybert,
+    author       = {Maarten Grootendorst},
+    title        = {KeyBERT: Minimal keyword extraction with BERT.},
+    year         = 2020,
+    publisher    = {Zenodo},
+    version      = {v0.3.0},
+    doi          = {10.5281/zenodo.4461265},
+    url          = {https://doi.org/10.5281/zenodo.4461265}
+  }
+
+KeyBERT's license:
+
+MIT License
+
+Copyright (c) 2020, Maarten P. Grootendorst
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

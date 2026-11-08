@@ -1,12 +1,19 @@
 # Lightweight dependencies needed to run the test suite.
-# The heavy ML stack (torch, transformers, keybert, openai) is replaced with
+# The heavy ML stack (torch, transformers) is replaced with
 # stand-ins in tests/conftest.py, so it does NOT need to be installed to run
 # the tests - no GPU, model downloads, or API key required.
+#
+# numpy/scikit-learn are real: tests/test_keyword_extraction.py runs the
+# actual keyword-ranking code (keyword_extraction.py). Keep these pins in
+# sync with requirements.txt.
 
-fastapi==0.115.14
+fastapi==0.162.2
 httpx==0.28.1
-pydantic==2.11.7
-uvicorn==0.34.3
+pydantic==2.14.3
+uvicorn==0.54.0
+
+numpy==2.5.4
+scikit-learn==1.9.1
 
 pytest==8.4.2
 pytest-asyncio==1.4.0

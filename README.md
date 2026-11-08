@@ -1,6 +1,6 @@
 # radar-keyword-search with TIB Terminology Service Support
 
-This service provides keyword extraction from documents using one of two interchangeable backends — `keybert`, a custom PubMedBERT model (CPU only), or `keyllm`, a local Ollama model — followed by entity linking to the [TIB Terminology Service](https://api.terminology.tib.eu), the
+This service extracts keywords from documents with a local BERT model (PubMedBERT by default, CPU only) and links them to the [TIB Terminology Service](https://api.terminology.tib.eu), the
 [GND](https://sta.dnb.de/doc/GND) (Gemeinsame Normdatei, via [lobid-gnd](https://lobid.org/gnd)), or both.
 
 > **How to run this service:** in **production, always use the Docker image** (`docker/dockerfile`) — see [Running in Production](#-running-in-production-docker) below. The `python`/`pip` commands further down are for **local development only** (running tests, debugging, iterating on `iri_api.py`).
@@ -17,8 +17,8 @@ docker run -d --name radar-keyword-search \
   docker.dev.fiz-karlsruhe.de/radar-keyword-search:0.1
 ```
 
-This starts with the default backend (`keybert`, CPU only, no external services needed). The
-first request after startup will be slow while the PubMedBERT model downloads/loads — check
+This needs no external services besides the terminology APIs. Startup is slow while the default
+BERT model (PubMedBERT) downloads/loads — check
 `docker logs radar-keyword-search` and wait for `Uvicorn running on http://0.0.0.0:8000` before
 sending requests.
 
@@ -56,78 +56,23 @@ curl -v --noproxy '*' -X POST http://localhost:8000/extract-iris \
 > `--noproxy '*'` avoids routing the request to `localhost` through a corporate proxy set via
 > `HTTP_PROXY`/`HTTPS_PROXY` on your machine — omit it if you don't have one configured.
 
-### 3. Switching Backend / Ollama Model in Production
+### 3. Choosing the BERT Model
 
-The backend is picked at container start via the `EXTRACTION_BACKEND` environment variable — pass
-it (and any backend-specific variables) with `-e` on `docker run`.
-
-First, start an Ollama server and pull a model into it. `llama3` is the default. Keyword extraction
-requests `response_format={"type": "json_object"}` from Ollama's OpenAI-compatible API, which
-constrains the model's output to valid JSON via grammar-constrained decoding regardless of the
-model, so this works reliably even with much smaller models (e.g. `qwen2.5:0.5b`, used in the
-integration test). Put Ollama on its own Docker network so the `radar-keyword-search` container can
-reach it by name:
-
-```bash
-docker network create radar-net
-
-docker run -d --name ollama \
-  --network radar-net \
-  -p 11434:11434 \
-  -v ollama:/root/.ollama \
-  ollama/ollama:latest
-
-docker exec ollama ollama pull llama3
-```
-
-`llama3` is a ~4.7GB download, so the pull takes a few minutes. `-p 11434:11434` is only needed if
-you also want to reach Ollama directly from the Docker host (e.g. `curl localhost:11434`); the
-`radar-keyword-search` container reaches it via the shared network regardless. `-v ollama:/root/.ollama`
-persists pulled models across container restarts.
-
-Then start the service pointed at it:
+Each request can pick a model with the `model` field; `GET /models` lists the available ones (see
+`bert_models.py`). The model used when a request names none is set at container start:
 
 ```bash
 docker run -d --name radar-keyword-search \
-  --network radar-net \
   -p 8000:8000 \
-  -e EXTRACTION_BACKEND=keyllm \
-  -e OLLAMA_BASE_URL=http://ollama:11434/v1 \
-  -e OLLAMA_MODEL=llama3 \
+  -e BERT_MODEL=gbert \
   docker.dev.fiz-karlsruhe.de/radar-keyword-search:0.1
 ```
 
-* `EXTRACTION_BACKEND`: `keybert` (default) or `keyllm`
-* `OLLAMA_BASE_URL`: where the Ollama server's OpenAI-compatible API is reachable **from inside the
-  container** — `localhost` here means the container itself, not the Docker host, so this must be
-  an address the container can actually resolve/reach:
-  * Ollama running in another container on the same Docker network: use that container's name,
-    e.g. `http://ollama:11434/v1`, and start both containers with `--network <shared-network>`.
-  * Ollama running directly on the Docker host: use `http://host.docker.internal:11434/v1`
-    (Docker Desktop) or the host's LAN/bridge IP on Linux (add `--add-host=host.docker.internal:host-gateway`
-    to `docker run` to get the same hostname to work there too).
-* `OLLAMA_MODEL`: any chat-capable model already pulled into that Ollama server, e.g. `llama3`
-  (default), `mistral`. Smaller models like `qwen2.5:0.5b` are useful for a quick wiring smoke
-  test, but not recommended for real keyword-extraction quality — see the note above.
-* `OLLAMA_HTTP_PROXY`: optional — only needed if the Ollama server is itself behind a proxy (by
-  default, calls to Ollama bypass any proxy set via `HTTP_PROXY`/`HTTPS_PROXY`, since Ollama is
-  typically local/internal and a corporate proxy would otherwise intercept and break those calls).
+* `BERT_MODEL`: optional, defaults to `pubmedbert`. The default model is loaded at startup, any
+  other model on its first request (and then cached).
 
-The active backend is reported by the `/` health check endpoint.
-
-### 3a. Reusing an Existing Ollama Server (docker-compose)
-
-If Ollama is already running on the host as its own container (e.g. as part of an Open WebUI
-stack), don't start a second one — join the existing Docker network instead and let
-`radar-keyword-search` reach it by container name. `docker/docker-compose.prod.yml` does this:
-
-```bash
-docker compose -f docker/docker-compose.prod.yml up -d
-```
-
-Edit the `OLLAMA_BASE_URL`/`OLLAMA_MODEL` environment values and the `networks.ollama-net.name` in
-that file to match your host's actual Ollama container name/network — see the comment at the top
-of the file for how to find it.
+The default model is reported by the `/` health check endpoint. `docker/docker-compose.prod.yml`
+runs the same container via `docker compose -f docker/docker-compose.prod.yml up -d`.
 
 ### 4. Building the Image Yourself
 
@@ -163,26 +108,7 @@ python -m venv radar-keywords-env && source radar-keywords-env/bin/activate
 pip install -r requirements.txt
 ```
 
-### 2. Choose a Backend
-
-The server picks **one** backend at startup, controlled by `EXTRACTION_BACKEND`. Only that
-backend's dependencies are loaded/required — selecting `keybert` never needs an Ollama
-server, and selecting `keyllm` never downloads the PubMedBERT model.
-
-| `EXTRACTION_BACKEND` | Description | Extra env vars |
-|---|---|---|
-| `keybert` (default) | Local PubMedBERT model via [KeyBERT](https://github.com/MaartenGr/KeyBERT), runs on CPU, no external services | — |
-| `keyllm` | A local/self-hosted [Ollama](https://ollama.com) model via its OpenAI-compatible API | `OLLAMA_BASE_URL` (optional, default `http://localhost:11434/v1`), `OLLAMA_MODEL` (optional, default `llama3`) |
-
-```bash
-# Example: run against a local Ollama server with a specific model
-export EXTRACTION_BACKEND=keyllm
-export OLLAMA_MODEL=mistral
-```
-
-> The active backend is reported by the `/` health check endpoint.
-
-### 3. Run the Server
+### 2. Run the Server
 
 Use `uvicorn` to launch the FastAPI app on port `8001` (or any other port of your choice):
 
@@ -190,10 +116,7 @@ Use `uvicorn` to launch the FastAPI app on port `8001` (or any other port of you
 uvicorn iri_api:app --reload --port 8001
 ```
 
-### 4. Usage Example
-
-There is a single endpoint regardless of backend — whichever one is active via `EXTRACTION_BACKEND`
-is used automatically:
+### 3. Usage Example
 
 ```bash
 curl --noproxy '*' -X POST http://localhost:8001/extract-iris \
@@ -208,9 +131,8 @@ curl --noproxy '*' -X POST http://localhost:8001/extract-iris \
 
 ## 🧠 Models Used
 
-* **`keybert`**: PubMedBERT (`microsoft/BiomedNLP-PubMedBERT-base-uncased-abstract-fulltext`), CPU only
-* **`keyllm`**: Any chat-capable model served by a local Ollama instance, called directly via its
-  OpenAI-compatible API with structured (`response_format={"type": "json_object"}`) output
+* Default: PubMedBERT (`microsoft/BiomedNLP-PubMedBERT-base-uncased-abstract-fulltext`), CPU only
+* Alternatives (SciBERT, BioBERT, GBERT, multilingual E5, ...): see `bert_models.py` or `GET /models`
 
 ---
 
@@ -218,9 +140,11 @@ curl --noproxy '*' -X POST http://localhost:8001/extract-iris \
 
 1. **Keyword Extraction** (`/extract-iris`):
 
-   * `keybert` backend: uses `KeyBERT` with PubMedBERT
-   * `keyllm` backend: calls a local Ollama server's OpenAI-compatible chat API directly, requesting
-     structured JSON output
+   The [KeyBERT](https://github.com/MaartenGr/KeyBERT) algorithm by Maarten Grootendorst, with
+   BERT embeddings: the document's own words (minus English stop words) are ranked by cosine
+   similarity to the whole document. It lives in `keyword_extraction.py`, a small port of the
+   code path of KeyBERT 0.9.0 that this service uses, with identical results; the `keybert`
+   package itself is no longer a dependency. See [Acknowledgements](#-acknowledgements).
 
 2. **IRI Linking** (chosen per request via `terminology`):
 
@@ -238,8 +162,8 @@ curl --noproxy '*' -X POST http://localhost:8001/extract-iris \
      * Persons are only matched for keywords of at least two words: a single word like `goethe` or
        `napoleon` would otherwise hit some person whose (variant) name is exactly that. Inverted
        names are also compared in natural order, so `Johann Wolfgang von Goethe` matches the GND's
-       `Goethe, Johann Wolfgang von`. Single-word keywords come from `keybert`; full names
-       typically from `keyllm`.
+       `Goethe, Johann Wolfgang von`. The BERT extractor only produces single words, so person
+       matches currently don't occur.
    * `both`: both lookups run in parallel; a matched candidate beats an unmatched one, then the
      smaller distance wins, and on a tie TIB wins.
    * `max_distance`: the Hamming distance pads the shorter string, so a keyword that's merely the
@@ -263,13 +187,7 @@ curl --noproxy '*' -X POST http://localhost:8001/extract-iris \
     of preference, defaults to `SubjectHeading,PlaceOrGeographicName,CorporateBody,Person`. Works
     and conferences are deliberately left out: they dominate unfiltered results (e.g. `Goethe`
     returns five *Works* first).
-
-  * `EXTRACTION_BACKEND`: `keybert` (default) or `keyllm`
-  * `OLLAMA_BASE_URL`: Optional, defaults to `http://localhost:11434/v1`
-  * `OLLAMA_MODEL`: Optional, defaults to `llama3`
-  * `OLLAMA_HTTP_PROXY`: Optional. By default, calls to Ollama bypass any system-configured
-    proxy entirely (Ollama is typically local/internal, and a corporate proxy can otherwise
-    intercept and break those calls). Set this if Ollama itself is only reachable through a proxy.
+  * `BERT_MODEL`: Optional, defaults to `pubmedbert`; the model used when a request names none
 
 ---
 
@@ -281,7 +199,7 @@ curl --noproxy '*' -X POST http://localhost:8001/extract-iris \
   "terminology": "Optional: tib (default) | gnd | both",
   "ontology": "Optional TIB ontology id(s) for filtering (e.g., et); TIB only",
   "ontology_collection": "Optional TIB collection id(s) (e.g., NFDI4CHEM); TIB only",
-  "model": "Optional BERT model name, see GET /models (keybert backend only)",
+  "model": "Optional BERT model name, see GET /models",
   "max_keywords": "Optional, 1-20, default 10",
   "max_distance": "Optional, 0-5, default 5; 0 = exact matches only"
 }
@@ -336,10 +254,12 @@ curl --noproxy '*' -X POST http://localhost:8001/extract-iris \
 
 ## 🧪 Running the Tests
 
-The test suite does **not** need the GPU/ML stack (torch, transformers, keybert, openai)
-installed, a GPU, network access, or a running Ollama server — `tests/conftest.py`
+The test suite does **not** need the ML stack (torch, transformers) installed, model
+downloads, or network access — `tests/conftest.py`
 replaces those heavy dependencies with lightweight stand-ins before `iri_api` is imported,
-and configures each one per test. Only the small web-framework packages are needed to run it:
+and configures each one per test. Only the small web-framework packages plus numpy and
+scikit-learn (for the real keyword-ranking tests in `tests/test_keyword_extraction.py`) are
+needed to run it:
 
 **Linux / macOS:**
 ```bash
@@ -361,7 +281,7 @@ HTTP_PROXY=http://proxy.example.com:8080 ./bin/runTests.sh
 Bamboo actually runs the tests in a container instead, via `bin/runTestsDocker.sh` (which builds
 `docker/Dockerfile.test`) — this avoids depending on whatever Python happens to be installed on the
 build agent. It writes a JUnit XML report to `test-results/junit.xml` for Bamboo's test results.
-The Ollama integration test below has an equivalent `bin/runIntegrationTestsDocker.sh`.
+The integration tests below have an equivalent `bin/runIntegrationTestsDocker.sh`.
 
 Leave `HTTP_PROXY`/`HTTPS_PROXY` unset for a normal, direct install (e.g. on a developer machine
 with unrestricted internet access).
@@ -382,8 +302,8 @@ pytest -q --cov=iri_api --cov-report=term-missing
 > Run the commands above from PowerShell or Command Prompt instead (using Windows Python,
 > e.g. Anaconda's), or Git Bash.
 
-This covers `hamming_distance`, `check_iri_exists`, `search_tib_best_match`, and `/extract-iris`
-under both backends (success, error, and edge cases like blank keywords from the LLM).
+This covers the keyword ranking (`keyword_extraction.py`), `hamming_distance`, `check_iri_exists`,
+`search_tib_best_match`, the GND lookup, and `/extract-iris` (success, error, and edge cases).
 
 ### Integration Tests
 
@@ -396,21 +316,6 @@ the suite above.
 pip install -r integration_tests/requirements.txt
 pytest integration_tests
 ```
-
-#### keyllm Backend Test
-
-`test_keyllm_backend.py` starts an actual Ollama server in a Docker container
-([testcontainers](https://testcontainers.com)), pulls a small model (`qwen2.5:0.5b`) into it, and
-sends a real request through the FastAPI app. Unlike the fast suite, this uses the **real**
-`keybert`/`openai`/`torch` packages (not stand-ins) and needs **Docker** running locally. The TIB
-Terminology API call is faked, so this test is only about the Ollama wiring.
-
-The pulled model is cached under `~/.cache/radar-keyword-search-ollama-test` on the host (mapped
-into the container), so repeat runs reuse it instead of re-downloading every time. Override the
-location with the `OLLAMA_TEST_CACHE_DIR` environment variable if needed.
-
-> The container always runs on CPU, even on a machine with an NVIDIA GPU — this test only needs to
-> prove the Ollama *wiring* works, not benchmark inference speed.
 
 #### GND (lobid) Test
 
@@ -426,7 +331,7 @@ it resolves — proving the TIB lookup pipeline (`search_tib_best_match` / `chec
 end-to-end. It needs outbound network access to `api.terminology.tib.eu` and to whatever ontology
 registry hosts the resolved IRIs (e.g. `purl.obolibrary.org` for ChEBI). Keyword extraction is
 faked with a fixed keyword list (and the ML packages are stubbed, like in the fast suite), so this
-test is only about the TIB integration, not any extraction backend.
+test is only about the TIB integration, not keyword extraction.
 
 ---
 
@@ -451,11 +356,7 @@ After=network.target
 User=admin
 Group=admin
 WorkingDirectory=/data/radar-keyword-search
-Environment="EXTRACTION_BACKEND=keybert"
-# On a GPU server running Ollama, use instead:
-# Environment="EXTRACTION_BACKEND=keyllm"
-# Environment="OLLAMA_BASE_URL=http://localhost:11434/v1"
-# Environment="OLLAMA_MODEL=llama3"
+Environment="BERT_MODEL=pubmedbert"
 Environment="PATH=/data/radar-keyword-search/radar-keywords-env/bin"
 
 ExecStart=/data/radar-keyword-search/radar-keywords-env/bin/python -m uvicorn iri_api:app --host 0.0.0.0 --port 8001
@@ -476,8 +377,39 @@ WantedBy=multi-user.target
 
 ---
 
+## 🙏 Acknowledgements
+
+The keyword extraction is based on **[KeyBERT](https://github.com/MaartenGr/KeyBERT)** by
+Maarten Grootendorst. This service used the `keybert` package until it was replaced by
+`keyword_extraction.py`, a port of the code path we use (from KeyBERT 0.9.0). The algorithm and
+its design are KeyBERT's; thank you for making it available.
+
+KeyBERT is released under the MIT License, which allows its code to be used, modified and
+redistributed within this Apache-2.0 project, provided its copyright and permission notice are
+kept. That notice is in the header of `keyword_extraction.py` and in [NOTICE](NOTICE), which is
+also shipped in the Docker image.
+
+If you use this service in research, please cite KeyBERT:
+
+```bibtex
+@misc{grootendorst2020keybert,
+  author       = {Maarten Grootendorst},
+  title        = {KeyBERT: Minimal keyword extraction with BERT.},
+  year         = 2020,
+  publisher    = {Zenodo},
+  version      = {v0.3.0},
+  doi          = {10.5281/zenodo.4461265},
+  url          = {https://doi.org/10.5281/zenodo.4461265}
+}
+```
+
+---
+
 ## ⚖️ License
 
 Copyright 2025-2026 FIZ Karlsruhe - Leibniz-Institut für Informationsinfrastruktur GmbH
 
 Licensed under the [Apache License, Version 2.0](LICENSE). You may not use this project except in compliance with the License. Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the [LICENSE](LICENSE) file for the specific language governing permissions and limitations.
+
+`keyword_extraction.py` contains code derived from [KeyBERT](https://github.com/MaartenGr/KeyBERT),
+Copyright (c) 2020 Maarten P. Grootendorst, used under the MIT License; see [NOTICE](NOTICE).
