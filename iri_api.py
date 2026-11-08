@@ -13,12 +13,14 @@
 # limitations under the License.
 
 from fastapi import FastAPI, HTTPException
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 from typing import Dict, Literal, Optional
 import uvicorn
 import asyncio
 import httpx
 import os
+import threading
 
 from urllib.parse import quote
 
@@ -68,6 +70,10 @@ _bert_model_cache: Dict[str, object] = {}
 # Position-embedding limit shared by every BERT-style model in BERT_MODEL_REGISTRY.
 BERT_MAX_TOKENS = 512
 
+# Every distinct word of a document is a candidate keyword and gets embedded. Embedding
+# them in batches of this size keeps memory bounded however long the document is.
+EMBED_BATCH_SIZE = 64
+
 def _mean_pooling(model_output, attention_mask):
     token_embeddings = model_output[0]
     input_mask_expanded = attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
@@ -91,6 +97,10 @@ class _BertEmbedding:
         # KeywordExtractor passes the candidate words as a numpy array of str, which the
         # tokenizer rejects - it only accepts a str or a list of str.
         docs = [self._prefix + str(doc) for doc in docs]
+        batches = [self._embed_batch(docs[i:i + EMBED_BATCH_SIZE]) for i in range(0, len(docs), EMBED_BATCH_SIZE)]
+        return torch.cat(batches).cpu().numpy()
+
+    def _embed_batch(self, docs):
         # Explicit max_length: some checkpoints (e.g. SciBERT) don't set model_max_length,
         # so truncation=True alone wouldn't truncate and a long abstract would overflow
         # BERT's 512 position embeddings.
@@ -99,8 +109,7 @@ class _BertEmbedding:
         )
         with torch.no_grad():
             model_output = self._model(**encoded_input)
-        embeddings = _mean_pooling(model_output, encoded_input['attention_mask'])
-        return embeddings.cpu().numpy()
+        return _mean_pooling(model_output, encoded_input['attention_mask'])
 
 def get_bert_model(model_key: str) -> "KeywordExtractor":
     """Return the KeywordExtractor for model_key, loading and caching it on first use."""
@@ -442,6 +451,17 @@ async def _none() -> None:
 
 DEFAULT_MAX_KEYWORDS = 10
 
+# Longest accepted document. Real requests are far shorter: radar-frontend sends title +
+# descriptions + optionally a README cut to 20,000 characters, and the longest of 708
+# harvested RADAR documents has 7,464. The cap bounds the work one request can cause.
+MAX_DOCUMENT_CHARS = int(os.getenv("MAX_DOCUMENT_CHARS", "100000"))
+
+# One extraction at a time: a Hugging Face fast tokenizer must not be used from two
+# threads at once ("Already borrowed"), torch already uses every CPU core for one
+# extraction, and a model requested twice at once must be loaded only once. Requests
+# queue here, in a worker thread, while the event loop keeps serving everything else.
+_extraction_lock = threading.Lock()
+
 def _extract_keyword_list(document: str, bert_model: Optional[str] = None, max_keywords: int = DEFAULT_MAX_KEYWORDS) -> list:
     """Extract a flat list of keywords, most relevant first.
 
@@ -449,20 +469,21 @@ def _extract_keyword_list(document: str, bert_model: Optional[str] = None, max_k
     DEFAULT_BERT_MODEL). max_keywords caps how many keywords are returned;
     there may be fewer if the document doesn't yield that many candidates.
     """
-    model = get_bert_model(bert_model or DEFAULT_BERT_MODEL)
-    keyword_scores = model.extract_keywords(
-        document,
-        top_n=max_keywords,
-        keyphrase_ngram_range=(1, 1),
-        stop_words=STOP_WORDS,
-    )
+    with _extraction_lock:
+        model = get_bert_model(bert_model or DEFAULT_BERT_MODEL)
+        keyword_scores = model.extract_keywords(
+            document,
+            top_n=max_keywords,
+            keyphrase_ngram_range=(1, 1),
+            stop_words=STOP_WORDS,
+        )
     return [kw for kw, _ in keyword_scores]
 
 # -------------------------------
 # Request Schema
 # -------------------------------
 class DocumentRequest(BaseModel):
-    document: str
+    document: str = Field(max_length=MAX_DOCUMENT_CHARS)
     ontology: Optional[str] = None
     ontology_collection: Optional[str] = None
     model: Optional[str] = None
@@ -494,7 +515,11 @@ async def extract_iris(req: DocumentRequest) -> Dict[str, Optional[Dict]]:
                 ),
             )
 
-        keyword_list = _extract_keyword_list(req.document, req.model, req.max_keywords or DEFAULT_MAX_KEYWORDS)
+        # CPU-bound: run it in a worker thread so the event loop stays free for other
+        # requests (health checks, the TIB/GND lookups of requests already past this point).
+        keyword_list = await run_in_threadpool(
+            _extract_keyword_list, req.document, req.model, req.max_keywords or DEFAULT_MAX_KEYWORDS
+        )
         print(f"Extracted keywords: {keyword_list}")
 
         threshold = HAMMING_THRESHOLD if req.max_distance is None else req.max_distance

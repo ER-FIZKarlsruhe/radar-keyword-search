@@ -193,6 +193,11 @@ curl --noproxy '*' -X POST http://localhost:8001/extract-iris \
     and conferences are deliberately left out: they dominate unfiltered results (e.g. `Goethe`
     returns five *Works* first).
   * `BERT_MODEL`: Optional, defaults to `pubmedbert`; the model used when a request names none
+  * `MAX_DOCUMENT_CHARS`: Optional, defaults to `100000`; longer documents are rejected with
+    HTTP 422. This bounds the work one request can cause: every distinct word is a candidate
+    keyword, and a 100,000-character document of distinct words takes about 50 s of CPU.
+    Keyword extraction runs one request at a time in a worker thread, so a long extraction
+    delays other extractions but not health checks or other requests' TIB/GND lookups.
 
 ---
 
@@ -200,7 +205,7 @@ curl --noproxy '*' -X POST http://localhost:8001/extract-iris \
 
 ```json
 {
-  "document": "Text to extract keywords from",
+  "document": "Text to extract keywords from, at most MAX_DOCUMENT_CHARS (default 100000) characters",
   "terminology": "Optional: tib (default) | gnd | both",
   "ontology": "Optional TIB ontology id(s) for filtering (e.g., et); TIB only",
   "ontology_collection": "Optional TIB collection id(s) (e.g., NFDI4CHEM); TIB only",
