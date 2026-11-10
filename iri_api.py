@@ -12,6 +12,23 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
+import sys
+import time
+
+
+def _startup_log(message: str) -> None:
+    """Print a timestamped startup message to stderr, flushed at once.
+
+    Startup (imports + loading the default model) runs before uvicorn's own logging
+    starts, and stdout is block-buffered in a container, so plain print()s only showed
+    up much later - or never, while the startup hangs, which is when they are needed.
+    """
+    print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} [startup] {message}", file=sys.stderr, flush=True)
+
+
+_startup_log(f"Starting radar keyword service (pid {os.getpid()}), importing libraries...")
+
 from fastapi import FastAPI, HTTPException
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
@@ -19,13 +36,14 @@ from typing import Dict, Literal, Optional
 import uvicorn
 import asyncio
 import httpx
-import os
 import threading
 
 from urllib.parse import quote
 
 import torch
 from transformers import CONFIG_MAPPING, AutoModel, AutoTokenizer
+
+_startup_log("Libraries imported.")
 
 from bert_models import BERT_MODEL_REGISTRY
 from keyword_extraction import KeywordExtractor
@@ -121,16 +139,26 @@ def get_bert_model(model_key: str) -> "KeywordExtractor":
     if model_key not in _bert_model_cache:
         entry = BERT_MODEL_REGISTRY[model_key]
         hf_model = entry["hf_model"]
-        print(f"Loading BERT model '{model_key}' ({hf_model})...")
+        _startup_log(f"Loading BERT model '{model_key}' ({hf_model})...")
+        started = time.monotonic()
         _bert_model_cache[model_key] = KeywordExtractor(
             _BertEmbedding(hf_model, entry.get("prefix", ""), entry.get("model_type")).embed
         )
+        _startup_log(f"BERT model '{model_key}' loaded in {time.monotonic() - started:.1f}s.")
     return _bert_model_cache[model_key]
 
 # Eagerly load the default model at startup so the first request isn't
 # slowed down by an on-demand load. Non-default models are loaded lazily,
-# the first time a request asks for them.
+# the first time a request asks for them. If the model isn't in the Hugging Face
+# cache yet it is downloaded here, which hangs without internet access - so log
+# where it comes from and through which proxy.
+_startup_log(
+    f"Default BERT model '{DEFAULT_BERT_MODEL}'; Hugging Face cache "
+    f"{os.getenv('HF_HOME', '~/.cache/huggingface')}, HF_HUB_OFFLINE={os.getenv('HF_HUB_OFFLINE', 'unset')}, "
+    f"HTTPS_PROXY {'set' if os.getenv('HTTPS_PROXY') or os.getenv('https_proxy') else 'unset'}"
+)
 kw_model = get_bert_model(DEFAULT_BERT_MODEL)
+_startup_log("Startup complete, uvicorn will now open the port.")
 
 # -------------------------------
 # Supporting Functions
