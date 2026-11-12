@@ -28,7 +28,7 @@ def test_extract_iris_resolves_real_gnd_subject_headings(real_tib_backend, monke
     monkeypatch.setattr(
         real_tib_backend,
         "_extract_keyword_list",
-        lambda document, bert_model=None, max_keywords=None: ["Schauspielmusik", "Forschungsdatenmanagement"],
+        lambda document, bert_model=None, max_keywords=None, candidates="words", language=None: ["Schauspielmusik", "Forschungsdatenmanagement"],
     )
 
     with TestClient(real_tib_backend.app) as client:
@@ -52,7 +52,7 @@ def test_extract_iris_with_both_picks_per_keyword(real_tib_backend, monkeypatch)
     monkeypatch.setattr(
         real_tib_backend,
         "_extract_keyword_list",
-        lambda document, bert_model=None, max_keywords=None: ["Schauspielmusik", "insulin"],
+        lambda document, bert_model=None, max_keywords=None, candidates="words", language=None: ["Schauspielmusik", "insulin"],
     )
 
     with TestClient(real_tib_backend.app) as client:
@@ -76,7 +76,7 @@ def test_extract_iris_matches_persons_by_full_name_and_exact_mode_drops_prefix_m
     monkeypatch.setattr(
         real_tib_backend,
         "_extract_keyword_list",
-        lambda document, bert_model=None, max_keywords=None: ["Johann Wolfgang von Goethe", "napoleon", "Weimar"],
+        lambda document, bert_model=None, max_keywords=None, candidates="words", language=None: ["Johann Wolfgang von Goethe", "napoleon", "Weimar"],
     )
 
     with TestClient(real_tib_backend.app) as client:
