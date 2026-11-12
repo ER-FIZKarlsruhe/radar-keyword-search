@@ -26,8 +26,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 
 # Shared by test_tib_service.py and test_gnd_service.py.
-# stop_words imports scikit-learn, which isn't installed here (extraction is faked).
-_STUBBED_MODULES = ("torch", "transformers", "keyword_extraction", "stop_words")
+# stop_words imports scikit-learn and noun_phrases imports spaCy, neither of which is
+# installed here (extraction is faked).
+_STUBBED_MODULES = ("torch", "transformers", "keyword_extraction", "stop_words", "noun_phrases")
 
 
 @pytest.fixture
