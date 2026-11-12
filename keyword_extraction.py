@@ -57,8 +57,11 @@ ranking (no MMR, no MaxSum, no seed keywords, no LLM). That path is:
 Output is identical to keybert==0.9.0 for the same embedder and arguments
 (see tests/test_keyword_extraction.py, whose expected values were produced by
 keybert 0.9.0 itself).
+
+Passing `candidates` (e.g. noun phrases from noun_phrases.py) skips step 1:
+those candidates are ranked instead of the document's own words.
 """
-from typing import Callable, List, Sequence, Tuple, Union
+from typing import Callable, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 from sklearn.feature_extraction.text import CountVectorizer
@@ -80,19 +83,30 @@ class KeywordExtractor:
         top_n: int = 5,
         keyphrase_ngram_range: Tuple[int, int] = (1, 1),
         stop_words: Union[str, List[str], None] = "english",
+        candidates: Optional[Sequence[str]] = None,
     ) -> List[Tuple[str, float]]:
-        """Return up to top_n (keyword, cosine score) pairs, most relevant first."""
+        """Return up to top_n (keyword, cosine score) pairs, most relevant first.
+
+        candidates, if given, are ranked instead of the document's own words;
+        keyphrase_ngram_range and stop_words then don't apply.
+        """
         if not doc or top_n <= 0:
             return []
 
-        try:
-            vectorizer = CountVectorizer(ngram_range=keyphrase_ngram_range, stop_words=stop_words).fit([doc])
-        except ValueError:
-            # Raised when the document has no candidates left, e.g. only stop words.
-            return []
+        if candidates is None:
+            try:
+                vectorizer = CountVectorizer(ngram_range=keyphrase_ngram_range, stop_words=stop_words).fit([doc])
+            except ValueError:
+                # Raised when the document has no candidates left, e.g. only stop words.
+                return []
+            # Fitted on this single document, so every vocabulary entry occurs in it.
+            candidates = vectorizer.get_feature_names_out()
+        else:
+            # Sorted like CountVectorizer's vocabulary, so ties are broken the same way.
+            candidates = sorted(set(candidates))
+            if not candidates:
+                return []
 
-        # Fitted on this single document, so every vocabulary entry occurs in it.
-        candidates = vectorizer.get_feature_names_out()
         doc_embedding = np.asarray(self._embed([doc])).reshape(1, -1)
         candidate_embeddings = np.asarray(self._embed(candidates))
 

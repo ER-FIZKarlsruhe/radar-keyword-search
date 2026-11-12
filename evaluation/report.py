@@ -355,6 +355,23 @@ def _selection(meta: Dict) -> str:
     return f"first {meta.get('limit')} datasets"
 
 
+# What a run label's suffix means (see run_extraction.py --keyword-candidates).
+CANDIDATE_LEGEND = {
+    "ngrams": "<b>+ngrams</b> = word sequences of up to three words (CountVectorizer n-grams 1–3)",
+    "phrases": "<b>+phrases</b> = noun phrases and nouns found by <b>spaCy</b> (de_core_news_md / en_core_web_md)",
+}
+
+
+def _candidates_legend(runs: List[Dict]) -> str:
+    """Explains the run label suffixes, if any run used other keyword candidates than single words."""
+    kinds = list(dict.fromkeys(r.get("keyword_candidates", "words") for r in runs))
+    parts = [CANDIDATE_LEGEND[k] for k in kinds if k in CANDIDATE_LEGEND]
+    if not parts:
+        return ""
+    return ('<p class="meta">Keyword candidates: model name alone = single words (service default) · '
+            + " · ".join(parts) + "</p>")
+
+
 def _domain_body(data: Dict, stats: Dict, h: str = "h2") -> str:
     """Everything below a report's title: meta line, charts, statistics, dataset table."""
     meta = data["meta"]
@@ -387,6 +404,7 @@ max {_e(domain_cfg.get('max_keywords'))} keywords · document = {_e(meta['docume
 {_e(_selection(meta))}: {ds_stats['count']} datasets, {ds_stats['with_abstract']} with abstract, {ds_stats['with_author_keywords']} with author keywords,
 median {_fmt(ds_stats['document_words']['median'])} words per document.
 Exact = max_distance 0, fuzzy = service default threshold.</div>
+{_candidates_legend(runs)}
 <{h}>Charts</{h}>
 {_charts(data, stats)}
 <{h}>Statistics</{h}>
@@ -451,6 +469,7 @@ def _overview(items: List) -> str:
     return ('<h2>Overview</h2><p class="meta">Link rate = share of extracted keywords linked to a vocabulary term. '
             "Author recall / precision = agreement with the datasets' own keywords (only datasets that have some). "
             'Exact and fuzzy runs of a model extract the same keywords, so author agreement is per model.</p>'
+            + _candidates_legend([r for data, _ in items for r in data["runs"]]) +
             f'<div class="scroll"><table class="stats">{head}{"".join(rows)}</table></div>')
 
 

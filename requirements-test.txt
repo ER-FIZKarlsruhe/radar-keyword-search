@@ -4,8 +4,9 @@
 # the tests - no GPU, model downloads, or API key required.
 #
 # numpy/scikit-learn are real: tests/test_keyword_extraction.py runs the
-# actual keyword-ranking code (keyword_extraction.py). Keep these pins in
-# sync with requirements.txt.
+# actual keyword-ranking code (keyword_extraction.py). So are spaCy and its
+# models: tests/test_noun_phrases.py parses with them (noun_phrases.py).
+# Keep these pins in sync with requirements.txt.
 
 fastapi==0.162.2
 httpx==0.28.1
@@ -14,6 +15,9 @@ uvicorn==0.54.0
 
 numpy==2.5.4
 scikit-learn==1.9.1
+spacy==3.8.18
+de_core_news_md @ https://github.com/explosion/spacy-models/releases/download/de_core_news_md-3.8.0/de_core_news_md-3.8.0-py3-none-any.whl
+en_core_web_md @ https://github.com/explosion/spacy-models/releases/download/en_core_web_md-3.8.0/en_core_web_md-3.8.0-py3-none-any.whl
 
 pytest==8.4.2
 pytest-asyncio==1.4.0

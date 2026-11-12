@@ -47,6 +47,7 @@ _startup_log("Libraries imported.")
 
 from bert_models import BERT_MODEL_REGISTRY
 from keyword_extraction import KeywordExtractor
+from noun_phrases import NounPhraseCandidates
 from stop_words import STOP_WORDS
 
 app = FastAPI()
@@ -158,6 +159,10 @@ _startup_log(
     f"HTTPS_PROXY {'set' if os.getenv('HTTPS_PROXY') or os.getenv('https_proxy') else 'unset'}"
 )
 kw_model = get_bert_model(DEFAULT_BERT_MODEL)
+
+# Noun phrases as keyword candidates (DocumentRequest.candidates == "phrases"). Its
+# spaCy pipelines are loaded on the first request that asks for them.
+noun_phrase_candidates = NounPhraseCandidates()
 _startup_log("Startup complete, uvicorn will now open the port.")
 
 # -------------------------------
@@ -479,6 +484,9 @@ async def _none() -> None:
 
 DEFAULT_MAX_KEYWORDS = 10
 
+# Word sequences ranked for DocumentRequest.candidates == "ngrams" (single words for "words").
+NGRAM_RANGE = (1, 3)
+
 # Longest accepted document. Real requests are far shorter: radar-frontend sends title +
 # descriptions + optionally a README cut to 20,000 characters, and the longest of 708
 # harvested RADAR documents has 7,464. The cap bounds the work one request can cause.
@@ -490,21 +498,36 @@ MAX_DOCUMENT_CHARS = int(os.getenv("MAX_DOCUMENT_CHARS", "100000"))
 # queue here, in a worker thread, while the event loop keeps serving everything else.
 _extraction_lock = threading.Lock()
 
-def _extract_keyword_list(document: str, bert_model: Optional[str] = None, max_keywords: int = DEFAULT_MAX_KEYWORDS) -> list:
+def _extract_keyword_list(
+    document: str,
+    bert_model: Optional[str] = None,
+    max_keywords: int = DEFAULT_MAX_KEYWORDS,
+    candidates: str = "words",
+    language: Optional[str] = None,
+) -> list:
     """Extract a flat list of keywords, most relevant first.
 
     bert_model selects a specific BERT_MODEL_REGISTRY entry (default:
     DEFAULT_BERT_MODEL). max_keywords caps how many keywords are returned;
     there may be fewer if the document doesn't yield that many candidates.
+    candidates selects what is ranked (see DocumentRequest.candidates);
+    language only applies to "phrases".
     """
     with _extraction_lock:
         model = get_bert_model(bert_model or DEFAULT_BERT_MODEL)
-        keyword_scores = model.extract_keywords(
-            document,
-            top_n=max_keywords,
-            keyphrase_ngram_range=(1, 1),
-            stop_words=STOP_WORDS,
-        )
+        if candidates == "phrases":
+            keyword_scores = model.extract_keywords(
+                document,
+                top_n=max_keywords,
+                candidates=noun_phrase_candidates(document, language),
+            )
+        else:
+            keyword_scores = model.extract_keywords(
+                document,
+                top_n=max_keywords,
+                keyphrase_ngram_range=NGRAM_RANGE if candidates == "ngrams" else (1, 1),
+                stop_words=STOP_WORDS,
+            )
     return [kw for kw, _ in keyword_scores]
 
 # -------------------------------
@@ -525,6 +548,12 @@ class DocumentRequest(BaseModel):
     # allowed_distance). Closer candidates are still reported with matched=false, so
     # clients can show how close they were.
     max_distance: Optional[int] = Field(default=None, ge=0, le=HAMMING_THRESHOLD)
+    # What is ranked as keyword candidates: the document's single words ("words", the
+    # default), its sequences of up to three words ("ngrams"), or its noun phrases and
+    # nouns found by spaCy ("phrases", see noun_phrases.py).
+    candidates: Literal["words", "ngrams", "phrases"] = "words"
+    # Language of the document for "phrases"; by default detected per paragraph.
+    language: Optional[Literal["de", "en"]] = None
 
 # -------------------------------
 # Endpoint
@@ -546,7 +575,12 @@ async def extract_iris(req: DocumentRequest) -> Dict[str, Optional[Dict]]:
         # CPU-bound: run it in a worker thread so the event loop stays free for other
         # requests (health checks, the TIB/GND lookups of requests already past this point).
         keyword_list = await run_in_threadpool(
-            _extract_keyword_list, req.document, req.model, req.max_keywords or DEFAULT_MAX_KEYWORDS
+            _extract_keyword_list,
+            req.document,
+            req.model,
+            req.max_keywords or DEFAULT_MAX_KEYWORDS,
+            req.candidates,
+            req.language,
         )
         print(f"Extracted keywords: {keyword_list}")
 

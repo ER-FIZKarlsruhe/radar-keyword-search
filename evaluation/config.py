@@ -37,6 +37,9 @@ MAX_KEYWORDS = 10
 
 # "exact" accepts only distance 0 (case-insensitive identical labels); "fuzzy"
 # leaves max_distance unset, so the service applies its default threshold.
+# Values of the service's `candidates` field: what it ranks as keywords.
+KEYWORD_CANDIDATES = ["words", "ngrams", "phrases"]
+
 MODES = {
     "exact": {"max_distance": 0},
     "fuzzy": {},

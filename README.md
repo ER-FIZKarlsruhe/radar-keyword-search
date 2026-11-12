@@ -53,6 +53,16 @@ curl -v --noproxy '*' -X POST http://localhost:8000/extract-iris \
   -d '{"document": "The mitochondria is the powerhouse of the cell and regulates apoptosis.", "ontology": "ncit"}'
 ```
 
+Rank noun phrases found by spaCy instead of single words, so multi-word terms like
+`historisch-kritische Edition` stay whole (`language` is optional, see
+[How It Works](#-how-it-works)):
+
+```bash
+curl -v --noproxy '*' -X POST http://localhost:8000/extract-iris \
+  -H 'Content-Type: application/json' \
+  -d '{"document": "Historisch-kritische Edition mit Schauspielmusik und Forschungsdatenmanagement", "model": "gbert", "terminology": "gnd", "candidates": "phrases", "language": "de"}'
+```
+
 > `--noproxy '*'` avoids routing the request to `localhost` through a corporate proxy set via
 > `HTTP_PROXY`/`HTTPS_PROXY` on your machine — omit it if you don't have one configured.
 
@@ -147,6 +157,21 @@ curl --noproxy '*' -X POST http://localhost:8001/extract-iris \
    code path of KeyBERT 0.9.0 that this service uses, with identical results; the `keybert`
    package itself is no longer a dependency. See [Acknowledgements](#-acknowledgements).
 
+   What is ranked is chosen per request via `candidates`:
+
+   * `words` (default): the document's single words, as described above.
+   * `ngrams`: its sequences of up to three words (after stop-word removal, so also
+     sequences that are no phrase, e.g. `regulates apoptosis`).
+   * `phrases`: its noun phrases and nouns, found by [spaCy](https://spacy.io)
+     (`noun_phrases.py`, pipelines `de_core_news_md` / `en_core_web_md`). Multi-word terms
+     like `type 2 diabetes mellitus` or `historisch-kritische edition` stay whole. Each
+     paragraph is parsed as German or English, whichever language has more stop words in it
+     (a paragraph without any, e.g. a title, takes the whole document's language);
+     `language` (`de`/`en`) overrides that. Articles and other function words are stripped
+     from a phrase's edges, and phrases longer than four words are cut to their last four
+     (the head noun and its closest modifiers). The spaCy pipelines are loaded on the first
+     request that asks for `phrases`.
+
 2. **IRI Linking** (chosen per request via `terminology`):
 
    * `tib` (default): each keyword is searched in the TIB Terminology API (optionally scoped by
@@ -163,8 +188,8 @@ curl --noproxy '*' -X POST http://localhost:8001/extract-iris \
      * Persons are only matched for keywords of at least two words: a single word like `goethe` or
        `napoleon` would otherwise hit some person whose (variant) name is exactly that. Inverted
        names are also compared in natural order, so `Johann Wolfgang von Goethe` matches the GND's
-       `Goethe, Johann Wolfgang von`. The BERT extractor only produces single words, so person
-       matches currently don't occur.
+       `Goethe, Johann Wolfgang von`. With the default `candidates: words` the extractor only
+       produces single words, so person matches only occur with `ngrams` or `phrases`.
    * `both`: both lookups run in parallel; a matched candidate beats an unmatched one, then the
      smaller distance wins, and on a tie TIB wins.
    * Allowed distance: a quarter of the keyword's length (rounded down), and at most
@@ -211,7 +236,9 @@ curl --noproxy '*' -X POST http://localhost:8001/extract-iris \
   "ontology_collection": "Optional TIB collection id(s) (e.g., NFDI4CHEM); TIB only",
   "model": "Optional BERT model name, see GET /models",
   "max_keywords": "Optional, 1-20, default 10",
-  "max_distance": "Optional, 0-5, default 5; 0 = exact matches only; shorter keywords get less (a quarter of their length)"
+  "max_distance": "Optional, 0-5, default 5; 0 = exact matches only; shorter keywords get less (a quarter of their length)",
+  "candidates": "Optional: words (default) | ngrams | phrases; what is ranked as keywords, see How It Works",
+  "language": "Optional: de | en; the document's language for candidates=phrases (default: detected per paragraph)"
 }
 ```
 
@@ -402,6 +429,10 @@ also shipped in the Docker image.
 The German stop words in `stop_words.py` are the [Snowball](https://snowballstem.org) project's
 German stop word list (Copyright (c) 2001 Dr Martin Porter, 2002 Richard Boulton), used under the
 3-clause BSD License; see [NOTICE](NOTICE).
+
+Noun phrases (`candidates: phrases`) are found with [spaCy](https://spacy.io) and its pipelines
+`de_core_news_md` and `en_core_web_md` by Explosion AI (MIT License; their training data is
+credited in [NOTICE](NOTICE)).
 
 If you use this service in research, please cite KeyBERT:
 

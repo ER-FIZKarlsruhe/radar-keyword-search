@@ -6,7 +6,7 @@ Standard library only — no extra dependencies.
 | Step | Script | Output |
 |------|--------|--------|
 | 1. Harvest OAI-PMH metadata once | `harvest.py [domain…]` | `../../radar-keyword-eval-data/harvest/<oai_set>/page_NNNN.xml` (outside the repo) |
-| 2. Run the keyword service | `run_extraction.py [domain…] [--limit N] [--random [--seed S]] [--require-abstract] [--models …]` | `results/<domain>_<timestamp>.json` |
+| 2. Run the keyword service | `run_extraction.py [domain…] [--limit N] [--random [--seed S]] [--require-abstract] [--models …] [--keyword-candidates …]` | `results/<domain>_<timestamp>.json` |
 | 3. Build reports + statistics | `report.py [result.json…] [--combined NAME]` | `reports/<name>.html`, `reports/<name>.stats.json`, with `--combined` also `reports/NAME.html` |
 
 Run them from this folder (`cd evaluation`). Domains, models, terminology and TIB collection
@@ -26,6 +26,12 @@ given domains, followed by each domain's full report.
 Each model runs in two modes: **exact** (`max_distance=0`) and **fuzzy** (the service's default
 threshold), with 10 keywords. The document sent is title + abstract.
 
+`--keyword-candidates words ngrams phrases` runs each model once per kind of keyword candidates
+(the service's `candidates` field: single words, word sequences of up to three words, or spaCy
+noun phrases). Runs other than `words` are labelled `<model>+<kind>` (e.g. `scibert+phrases`) and
+appear in the report like separate models. The service must support `candidates`: an older one
+ignores the field, and all kinds then give the same keywords.
+
 Environment overrides: `KEYWORD_SERVICE_URL` (default `https://ai.radar-service.eu/keywords`),
 `RADAR_OAI_URL`, `KEYWORD_EVAL_HARVEST_DIR`, `KEYWORD_EVAL_RESULTS_DIR`, `KEYWORD_EVAL_REPORTS_DIR`.
 
@@ -33,7 +39,7 @@ Environment overrides: `KEYWORD_SERVICE_URL` (default `https://ai.radar-service.
 
 ```text
 { schema_version, meta: {domain, oai_set, service_url, service_health, git_commit, started, finished, ...},
-  runs: [ {id: "<model>/<mode>", model, mode, request: {...exact payload sent...}} ],
+  runs: [ {id: "<model>/<mode>", model, bert_model, keyword_candidates, mode, request: {...exact payload sent...}} ],
   datasets: [ {identifier, title, abstract, author_keywords, subject_areas, document,
                results: { "<run id>": {status, error, elapsed_s,
                                        keywords: [ {rank, keyword, match: null | {iri, label, best_term,

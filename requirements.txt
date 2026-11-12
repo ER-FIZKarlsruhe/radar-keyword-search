@@ -11,12 +11,19 @@
 annotated-doc==0.0.5
 annotated-types==0.8.0
 anyio==4.16.0
+blis==1.3.4
+catalogue==2.0.10
 certifi==2026.10.23
 charset-normalizer==3.5.2
 click==8.5.1
+cloudpathlib==0.26.0
 cloudpickle==3.1.2
+confection==1.3.4
+cymem==2.0.16
+de_core_news_md @ https://github.com/explosion/spacy-models/releases/download/de_core_news_md-3.8.0/de_core_news_md-3.8.0-py3-none-any.whl
 dnspython==2.9.2
 email-validator==2.3.0
+en_core_web_md @ https://github.com/explosion/spacy-models/releases/download/en_core_web_md-3.8.0/en_core_web_md-3.8.0-py3-none-any.whl
 fastapi==0.162.2
 fastapi-cli==0.0.32
 filelock==4.2.9
@@ -37,12 +44,14 @@ markdown-it-py==4.2.0
 MarkupSafe==3.0.4
 mdurl==0.1.2
 mpmath==1.3.0
+murmurhash==1.0.16
 narwhals==2.28.0
 networkx==3.7
 numpy==2.5.4
 opentelemetry-api==1.45.2
 orjson==3.13.0
 packaging==26.3
+preshed==3.0.15
 psutil==7.2.2
 py-cpuinfo==9.0.0
 pydantic==2.14.3
@@ -62,9 +71,15 @@ scikit-learn==1.9.1
 scipy==1.18.1
 setuptools==84.2.1
 shellingham==1.5.4
+smart_open==9.0.3
 sniffio==1.3.1
+spacy==3.8.18
+spacy-legacy==3.0.12
+spacy-loggers==1.0.5
+srsly==2.5.6
 starlette==1.10.0
 sympy==1.14.0
+thinc==8.3.14
 threadpoolctl==3.8.0
 tokenizers==0.23.3
 torch==2.13.0+cpu
@@ -78,5 +93,8 @@ ujson==6.1.0
 urllib3==2.8.0
 uvicorn==0.54.0
 uvloop==0.23.0
+wasabi==1.1.3
 watchfiles==1.3.0
+weasel==1.0.1
 websockets==17.4
+wrapt==2.5.2

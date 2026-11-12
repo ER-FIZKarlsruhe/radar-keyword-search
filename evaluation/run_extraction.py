@@ -16,13 +16,17 @@
 
 For each domain, every configured model is run in every mode (exact / fuzzy)
 on the first --limit datasets, or on --limit randomly chosen ones with
---random. Output: RESULTS_DIR/<domain>_<timestamp>.json.
+--random. With --keyword-candidates, each model also runs once per kind of
+keyword candidates (the service's `candidates` field); such runs are labelled
+"<model>+<kind>", except for the default kind "words". Output:
+RESULTS_DIR/<domain>_<timestamp>.json.
 
     python evaluation/run_extraction.py                    # all domains, first 10 datasets
     python evaluation/run_extraction.py chem --limit 50
     python evaluation/run_extraction.py --limit 20 --random --seed 42
     python evaluation/run_extraction.py culture --require-abstract
     python evaluation/run_extraction.py culture --models gbert multilingual-e5
+    python evaluation/run_extraction.py chem --keyword-candidates words ngrams phrases
 """
 
 import argparse
@@ -36,7 +40,7 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
-from config import DOMAINS, EVAL_DIR, MAX_KEYWORDS, MODES, RESULTS_DIR, SERVICE_URL
+from config import DOMAINS, EVAL_DIR, KEYWORD_CANDIDATES, MAX_KEYWORDS, MODES, RESULTS_DIR, SERVICE_URL
 from records import document_text, load_datasets
 
 SCHEMA_VERSION = 1
@@ -87,10 +91,11 @@ def extract(payload: dict) -> dict:
     return result
 
 
-def run_domain(domain: str, limit: int, require_abstract: bool, models, seed=None) -> Path:
+def run_domain(domain: str, limit: int, require_abstract: bool, models, seed=None, keyword_candidates=None) -> Path:
     """seed=None takes the first `limit` datasets; otherwise a random sample drawn with that seed."""
     config = DOMAINS[domain]
     models = models or config["models"]
+    keyword_candidates = keyword_candidates or ["words"]
 
     candidates = [d for d in load_datasets(config["oai_set"]) if d["abstract"] or not require_abstract]
     if seed is None:
@@ -99,15 +104,20 @@ def run_domain(domain: str, limit: int, require_abstract: bool, models, seed=Non
         datasets = random.Random(seed).sample(candidates, min(limit, len(candidates)))
     runs = []
     for model in models:
-        for mode, mode_params in MODES.items():
-            request = {
-                "model": model,
-                "max_keywords": MAX_KEYWORDS,
-                "terminology": config["terminology"],
-                "ontology_collection": config["ontology_collection"],
-                **mode_params,
-            }
-            runs.append({"id": f"{model}/{mode}", "model": model, "mode": mode, "request": request})
+        for kind in keyword_candidates:
+            # The report groups and colours runs by "model", so it carries the kind too.
+            label = model if kind == "words" else f"{model}+{kind}"
+            for mode, mode_params in MODES.items():
+                request = {
+                    "model": model,
+                    "max_keywords": MAX_KEYWORDS,
+                    "terminology": config["terminology"],
+                    "ontology_collection": config["ontology_collection"],
+                    **({} if kind == "words" else {"candidates": kind}),
+                    **mode_params,
+                }
+                runs.append({"id": f"{label}/{mode}", "model": label, "bert_model": model,
+                             "keyword_candidates": kind, "mode": mode, "request": request})
 
     output = {
         "schema_version": SCHEMA_VERSION,
@@ -123,6 +133,7 @@ def run_domain(domain: str, limit: int, require_abstract: bool, models, seed=Non
             "seed": seed,
             "candidates": len(candidates),
             "require_abstract": require_abstract,
+            "keyword_candidates": keyword_candidates,
             "document": "title + abstract",
         },
         "runs": runs,
@@ -160,13 +171,15 @@ def main() -> None:
     parser.add_argument("--models", nargs="+", help="override the domain's configured models")
     parser.add_argument("--random", action="store_true", help="draw --limit datasets at random instead of the first ones")
     parser.add_argument("--seed", type=int, help="seed for --random, to repeat a sample (default: a new random seed, stored in the result)")
+    parser.add_argument("--keyword-candidates", nargs="+", choices=KEYWORD_CANDIDATES, default=["words"],
+                        help="kinds of keyword candidates to run each model with (default: words)")
     args = parser.parse_args()
     seed = (args.seed if args.seed is not None else random.randrange(1_000_000)) if args.random else None
     unknown = set(args.domains) - set(DOMAINS)
     if unknown:
         parser.error(f"unknown domain(s): {', '.join(sorted(unknown))}")
     for domain in args.domains or DOMAINS:
-        run_domain(domain, args.limit, args.require_abstract, args.models, seed)
+        run_domain(domain, args.limit, args.require_abstract, args.models, seed, args.keyword_candidates)
 
 
 if __name__ == "__main__":

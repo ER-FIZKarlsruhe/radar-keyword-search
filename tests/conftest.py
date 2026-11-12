@@ -22,7 +22,8 @@ downloads or network access.
 So before iri_api is imported, we replace the heavy ML packages it depends on
 (torch, transformers) with plain MagicMock stand-ins, along with
 keyword_extraction (which needs numpy/scikit-learn; it has its own real
-tests in test_keyword_extraction.py). Every attribute access / call on a
+tests in test_keyword_extraction.py) and noun_phrases (which needs spaCy;
+real tests in test_noun_phrases.py). Every attribute access / call on a
 MagicMock just returns another MagicMock, so all of the module-level setup
 code in iri_api.py (model loading etc.) runs without error. Individual tests
 then configure the specific mock methods they need (e.g.
@@ -39,7 +40,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-for _module_name in ("torch", "transformers", "keyword_extraction"):
+for _module_name in ("torch", "transformers", "keyword_extraction", "noun_phrases"):
     sys.modules[_module_name] = MagicMock()
 
 # scipy (used by the real scikit-learn in test_keyword_extraction.py) checks
@@ -88,3 +89,4 @@ def _reset_ml_mocks():
     """Ensure mock configuration from one test never leaks into the next."""
     yield
     iri_api.kw_model.extract_keywords.reset_mock(return_value=True, side_effect=True)
+    iri_api.noun_phrase_candidates.reset_mock(return_value=True, side_effect=True)

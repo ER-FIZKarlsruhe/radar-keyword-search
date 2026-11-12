@@ -27,7 +27,7 @@ WORKDIR /app
 COPY --from=builder /opt/venv /opt/venv
 ENV PATH="/opt/venv/bin:${PATH}"
 
-COPY iri_api.py bert_models.py keyword_extraction.py stop_words.py LICENSE NOTICE ./
+COPY iri_api.py bert_models.py keyword_extraction.py noun_phrases.py stop_words.py LICENSE NOTICE ./
 
 # Create the Hugging Face cache owned by appuser: a named volume mounted there
 # (to keep downloaded models across restarts) takes its ownership from the image

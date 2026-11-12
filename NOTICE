@@ -95,3 +95,19 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+-------------------------------------------------------------------------------
+Third-party data: spaCy pipelines de_core_news_md and en_core_web_md
+-------------------------------------------------------------------------------
+
+noun_phrases.py parses documents with the spaCy pipelines de_core_news_md and
+en_core_web_md 3.8.0 by Explosion AI (https://github.com/explosion/spacy-models),
+which the Docker image installs as Python packages. They are licensed under
+the MIT License; their training data is credited in the LICENSES_SOURCES file
+installed with each package:
+
+- de_core_news_md: TIGER Corpus (licensed by Explosion), Tiger2Dep, WikiNER
+  (Nothman et al., CC BY 4.0).
+- en_core_web_md: OntoNotes 5 (licensed by Explosion), ClearNLP
+  Constituent-to-Dependency Conversion, WordNet 3.0 (Princeton University,
+  WordNet 3.0 License).
