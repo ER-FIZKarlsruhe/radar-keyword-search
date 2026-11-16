@@ -5,7 +5,7 @@
 #
 # numpy/scikit-learn are real: tests/test_keyword_extraction.py runs the
 # actual keyword-ranking code (keyword_extraction.py). So are spaCy and its
-# models: tests/test_noun_phrases.py parses with them (noun_phrases.py).
+# models: tests/test_pos_ngrams.py tags with them (pos_ngrams.py).
 # Keep these pins in sync with requirements.txt.
 
 fastapi==0.162.2

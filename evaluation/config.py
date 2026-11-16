@@ -28,8 +28,8 @@ OAI_METADATA_PREFIX = "radar"
 
 SERVICE_URL = os.getenv("KEYWORD_SERVICE_URL", "https://ai.radar-service.eu/keywords").rstrip("/")
 
-# Harvested OAI-PMH pages live outside the project, next to the repo checkout.
-HARVEST_DIR = Path(os.getenv("KEYWORD_EVAL_HARVEST_DIR", EVAL_DIR.parents[1] / "radar-keyword-eval-data" / "harvest"))
+# Harvested OAI-PMH pages live in evaluation/data/, which is git-ignored.
+HARVEST_DIR = Path(os.getenv("KEYWORD_EVAL_HARVEST_DIR", EVAL_DIR / "data" / "harvest"))
 RESULTS_DIR = Path(os.getenv("KEYWORD_EVAL_RESULTS_DIR", EVAL_DIR / "results"))
 REPORTS_DIR = Path(os.getenv("KEYWORD_EVAL_REPORTS_DIR", EVAL_DIR / "reports"))
 
@@ -37,9 +37,6 @@ MAX_KEYWORDS = 10
 
 # "exact" accepts only distance 0 (case-insensitive identical labels); "fuzzy"
 # leaves max_distance unset, so the service applies its default threshold.
-# Values of the service's `candidates` field: what it ranks as keywords.
-KEYWORD_CANDIDATES = ["words", "ngrams", "phrases"]
-
 MODES = {
     "exact": {"max_distance": 0},
     "fuzzy": {},

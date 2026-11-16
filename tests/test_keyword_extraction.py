@@ -101,46 +101,8 @@ def test_results_are_plain_str_and_float(extractor):
     assert type(keyword) is str and type(score) is float
 
 
-# -------------------------------
-# Given candidates (e.g. noun phrases) instead of the document's own words
-# -------------------------------
-def _cosine(a, b):
-    a, b = np.asarray(a, dtype=float), np.asarray(b, dtype=float)
-    return float(a @ b / (np.linalg.norm(a) * np.linalg.norm(b)))
+def test_exposes_its_embed_function_for_other_rankers():
+    def embed(texts):
+        return np.ones((len(texts), 2))
 
-
-def test_given_candidates_are_ranked_by_similarity_to_the_document(extractor):
-    doc = "Insulin resistance and glucose metabolism in patients with type 2 diabetes mellitus."
-    candidates = ["insulin resistance", "glucose metabolism", "type 2 diabetes mellitus"]
-
-    result = extractor.extract_keywords(doc, top_n=3, candidates=candidates)
-
-    doc_vector = fake_embed([doc])[0]
-    expected = sorted(
-        ((c, round(_cosine(doc_vector, fake_embed([c])[0]), 4)) for c in candidates),
-        key=lambda pair: pair[1],
-        reverse=True,
-    )
-    assert result == expected
-
-
-def test_given_candidates_replace_the_documents_words(extractor):
-    result = extractor.extract_keywords("insulin glucose metabolism", top_n=10, candidates=["glucose metabolism"])
-
-    assert [kw for kw, _ in result] == ["glucose metabolism"]
-
-
-def test_given_candidates_are_ranked_once_each(extractor):
-    result = extractor.extract_keywords("insulin glucose", top_n=10, candidates=["insulin", "glucose", "insulin"])
-
-    assert sorted(kw for kw, _ in result) == ["glucose", "insulin"]
-
-
-def test_top_n_limits_given_candidates_too(extractor):
-    result = extractor.extract_keywords("insulin glucose", top_n=1, candidates=["insulin", "glucose"])
-
-    assert len(result) == 1
-
-
-def test_no_given_candidates_yield_nothing(extractor):
-    assert extractor.extract_keywords("insulin glucose", top_n=5, candidates=[]) == []
+    assert keyword_extraction.KeywordExtractor(embed).embed is embed

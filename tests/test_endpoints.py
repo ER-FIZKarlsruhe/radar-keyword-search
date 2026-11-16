@@ -207,3 +207,42 @@ def test_extract_iris_rejects_a_max_distance_above_the_threshold():
         response = client.post("/extract-iris", json={"document": "x", "max_distance": 6})
 
     assert response.status_code == 422
+
+
+def test_extract_iris_with_pos_ngrams_ranks_phrases_with_the_requests_model(monkeypatch):
+    iri_api.pos_ngram_extractor.return_value = ["keratosis pilaris", "skin"]
+    calls = []
+    _fake_lookups(monkeypatch, calls)
+
+    with _client() as client:
+        response = client.post(
+            "/extract-iris",
+            json={"document": "Keratosis pilaris of the skin.", "candidates": "pos-ngrams", "max_keywords": 5},
+        )
+
+    assert response.status_code == 200
+    assert list(response.json()) == ["keratosis pilaris", "skin"]
+    iri_api.pos_ngram_extractor.assert_called_once_with(
+        "Keratosis pilaris of the skin.", iri_api.kw_model.embed, 5
+    )
+    iri_api.kw_model.extract_keywords.assert_not_called()
+
+
+def test_extract_iris_defaults_to_single_words(monkeypatch):
+    iri_api.kw_model.extract_keywords.return_value = [("edition", 0.9)]
+    _fake_lookups(monkeypatch, [])
+
+    with _client() as client:
+        response = client.post("/extract-iris", json={"document": "edition"})
+
+    assert response.status_code == 200
+    assert list(response.json()) == ["edition"]
+    iri_api.pos_ngram_extractor.assert_not_called()
+    assert iri_api.kw_model.extract_keywords.call_args.kwargs["keyphrase_ngram_range"] == (1, 1)
+
+
+def test_extract_iris_rejects_unknown_candidates():
+    with _client() as client:
+        response = client.post("/extract-iris", json={"document": "x", "candidates": "phrases"})
+
+    assert response.status_code == 422

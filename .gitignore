@@ -10,3 +10,5 @@ htmlcov/
 test-results/
 evaluation/results/
 evaluation/reports/
+evaluation/benchmark/results/
+evaluation/data/
