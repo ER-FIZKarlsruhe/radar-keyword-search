@@ -528,8 +528,8 @@ class DocumentRequest(BaseModel):
     max_keywords: Optional[int] = Field(default=None, ge=1, le=20)
     # Where the extracted keywords are looked up: the TIB Terminology Service, the GND,
     # or both (the better match per keyword wins). ontology/ontology_collection only
-    # apply to TIB.
-    terminology: Literal["tib", "gnd", "both"] = "tib"
+    # apply to TIB. "none" skips the lookup: keywords only, every value null.
+    terminology: Literal["tib", "gnd", "both", "none"] = "tib"
     # What the keywords are made of: "words" ranks the document's single words by their
     # similarity to the document (KeyBERT); "pos-ngrams" ranks phrases of up to three words
     # and prefers early, frequent and diverse ones (see pos_ngrams.py).
@@ -564,6 +564,10 @@ async def extract_iris(req: DocumentRequest) -> Dict[str, Optional[Dict]]:
             req.candidates,
         )
         print(f"Extracted keywords: {keyword_list}")
+
+        if req.terminology == "none":
+            # Keywords only: no HTTP client, so nothing reaches TIB, GND or any IRI host.
+            return dict.fromkeys(keyword_list)
 
         threshold = HAMMING_THRESHOLD if req.max_distance is None else req.max_distance
         use_tib = req.terminology in ("tib", "both")

@@ -170,6 +170,28 @@ def test_extract_iris_with_both_returns_the_better_match(monkeypatch):
     assert {c[0] for c in calls} == {"tib", "gnd", "resolve"}
 
 
+def test_extract_iris_with_none_only_extracts_keywords(monkeypatch):
+    iri_api.kw_model.extract_keywords.return_value = [("edition", 0.9), ("musik", 0.8)]
+    calls = []
+    _fake_lookups(monkeypatch, calls)
+
+    def no_http_client(*args, **kwargs):
+        raise AssertionError("terminology=none must not open an HTTP client")
+
+    monkeypatch.setattr(iri_api.httpx, "AsyncClient", no_http_client)
+
+    with _client() as client:
+        response = client.post(
+            "/extract-iris",
+            json={"document": "edition musik", "terminology": "none", "ontology_collection": "nfdi4culture"},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {"edition": None, "musik": None}
+    assert list(response.json()) == ["edition", "musik"]
+    assert calls == []
+
+
 def test_extract_iris_rejects_an_unknown_terminology():
     with _client() as client:
         response = client.post("/extract-iris", json={"document": "x", "terminology": "wikidata"})

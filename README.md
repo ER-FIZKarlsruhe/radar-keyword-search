@@ -179,6 +179,8 @@ curl --noproxy '*' -X POST http://localhost:8001/extract-iris \
        produces single words, so person matches only occur with `pos-ngrams`.
    * `both`: both lookups run in parallel; a matched candidate beats an unmatched one, then the
      smaller distance wins, and on a tie TIB wins.
+   * `none`: no lookup at all, the service makes no outgoing request; every keyword is
+     returned with the value `null`. For clients that only need the keywords.
    * Allowed distance: a quarter of the keyword's length (rounded down), and at most
      `max_distance` (default 5). Keywords under 4 letters need an exact match, 4–7 letters may
      differ by 1, 8–11 by 2, and so on. This accepts small edits such as `nanoparticles` →
@@ -218,7 +220,7 @@ curl --noproxy '*' -X POST http://localhost:8001/extract-iris \
 ```json
 {
   "document": "Text to extract keywords from, at most MAX_DOCUMENT_CHARS (default 100000) characters",
-  "terminology": "Optional: tib (default) | gnd | both",
+  "terminology": "Optional: tib (default) | gnd | both | none; none = keywords only, no TIB/GND request",
   "ontology": "Optional TIB ontology id(s) for filtering (e.g., et); TIB only",
   "ontology_collection": "Optional TIB collection id(s) (e.g., NFDI4CHEM); TIB only",
   "model": "Optional BERT model name, see GET /models",
@@ -270,7 +272,8 @@ curl --noproxy '*' -X POST http://localhost:8001/extract-iris \
   `keywordScheme` (`GND` / `Other`), `schemeURI` and `classificationCode` attributes.
 * `label`: the term's preferred label; `best_term`: the label or synonym/variant that actually matched.
 
-> The value is `null` only if the search failed or returned no candidates at all.
+> The value is `null` if the search failed or returned no candidates at all, and always with
+> `"terminology": "none"` (keywords only, no TIB/GND request).
 
 ---
 
