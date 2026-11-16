@@ -35,13 +35,17 @@ computes it) is standardised within the document and adjusted by
     score = z(sim) + LENGTH_BONUS[words] + W_POSITION * (1 - first_position) + W_FREQUENCY * ln(occurrences)
 
 Keywords are then picked greedily, best score first: a candidate is skipped if it
-is an inflected variant of a picked keyword, and penalised by MMR_LAMBDA times its
-largest similarity to a picked keyword, so near-duplicates don't fill the list.
+is an inflected variant or a part of a picked keyword ("keratosis" after "keratosis
+pilaris"), and penalised by MMR_LAMBDA times its largest similarity to a picked
+keyword, so near-duplicates don't fill the list. A phrase that extends a picked
+keyword is kept: it is often the more specific term ("acute respiratory failure").
 
 The weights were tuned on the keyword benchmark (evaluation/benchmark/) against
 ChatGPT's keywords for 243 abstracts (chemistry, medicine, humanities; German and
 English) with the multilingual-e5 model: on held-out documents F1@10 rose from
-0.21 (single words: 0.14) to 0.23.
+0.21 (single words: 0.14) to 0.23. Skipping parts of picked keywords removes about
+two thirds of the overlapping keywords at the same F1 vs. ChatGPT, but lowers F1 against
+the reference keywords (GND subjects, author keywords) from 0.115 to 0.091.
 """
 import re
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
@@ -91,6 +95,7 @@ GENERIC_ADJECTIVES = {
     "early", "late", "long", "short", "wide", "broad", "single", "multiple", "additional",
     "available", "useful", "interesting", "promising", "excellent", "remarkable", "typical",
     "increased", "reduced", "higher", "lower", "larger", "smaller", "greater", "due",
+    "harmless", "excessive",
     # German (stems, see _is_generic_adjective)
     "neu", "verschieden", "unterschiedlich", "mehrere", "viel", "weit", "ander", "weiter",
     "stark", "schwach", "hoch", "niedrig", "groß", "klein", "wichtig", "signifikant",
@@ -99,7 +104,7 @@ GENERIC_ADJECTIVES = {
     "relevant", "bestimmt", "besonder", "ähnlich", "gleich", "ganz", "früh", "spät", "lang",
     "kurz", "breit", "einzeln", "zusätzlich", "verfügbar", "nützlich", "interessant",
     "typisch", "häufig", "selten", "ausgeprägt", "erhöht", "vermindert", "zahlreich",
-    "jeweilig", "folgend", "entsprechend", "sogenannt",
+    "jeweilig", "folgend", "entsprechend", "sogenannt", "ungefährlich", "harmlos", "überschüssig",
 }
 
 # The pipelines run without lemmatizer, so German adjective endings are cut off by hand
@@ -179,6 +184,13 @@ def _is_variant(a: str, b: str) -> bool:
     return len(wa) == len(wb) and all(_edit_distance(x, y) <= min(len(x), len(y)) // 4 for x, y in zip(wa, wb))
 
 
+def _is_part_of(part: str, phrase: str) -> bool:
+    """Every word of part occurs, up to inflection, in the longer phrase."""
+    wp, wf = part.split(), phrase.split()
+    return len(wp) < len(wf) and all(
+        any(_edit_distance(x, y) <= min(len(x), len(y)) // 4 for y in wf) for x in wp)
+
+
 def _normalized(v: np.ndarray) -> np.ndarray:
     return v / np.linalg.norm(v, axis=-1, keepdims=True)
 
@@ -244,6 +256,7 @@ class PosNgramExtractor:
             else:
                 pick = remaining[0]
             remaining.remove(pick)
-            if not any(_is_variant(candidates[pick], candidates[o]) for o in chosen):
+            if not any(_is_variant(candidates[pick], candidates[o]) or _is_part_of(candidates[pick], candidates[o])
+                       for o in chosen):
                 chosen.append(pick)
         return [candidates[i] for i in chosen]

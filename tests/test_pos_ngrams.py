@@ -95,6 +95,14 @@ def test_generic_adjectives_are_left_out_also_when_inflected(extractor):
     assert extractor.candidates("Die verschiedenen Methoden der Edition wurden verglichen.") == ["edition", "methoden"]
 
 
+def test_evaluative_adjectives_are_left_out(extractor):
+    candidates = extractor.candidates("Die ungefährliche Keratosis pilaris entsteht durch überschüssige Keratinozyten.")
+
+    assert "keratosis pilaris" in candidates
+    assert "keratinozyten" in candidates
+    assert not any(c.startswith(("ungefährlich", "überschüssig")) for c in candidates)
+
+
 def test_hyphenated_words_are_one_word(extractor):
     assert "historisch-kritische edition" in extractor.candidates("Die historisch-kritische Edition der Briefe erschien.")
     assert "anti-inflammatory drug" in extractor.candidates("The anti-inflammatory drug reduced pain in children.")
@@ -134,6 +142,38 @@ def test_inflected_variants_are_picked_only_once(extractor):
     assert len([k for k in keywords if k in ("patient", "patients")]) == 1
 
 
+def test_parts_of_a_picked_phrase_are_skipped(extractor):
+    # The phrase matches the document best, so it is picked first; its single words follow
+    # on rank alone but repeat it.
+    text = "Keratosis pilaris."
+    embed = _bag_of_words(["keratosis", "pilaris"])
+
+    assert extractor(text, embed, top_n=10) == ["keratosis pilaris"]
+
+
+def test_parts_are_skipped_also_when_inflected(extractor):
+    text = "Follikuläre Hyperkeratosen. Follikuläre Hyperkeratosen."
+    embed = _bag_of_words(["follikuläre", "hyperkeratosen", "hyperkeratose"])
+
+    keywords = extractor(text + " Hyperkeratose.", embed, top_n=10)
+
+    assert keywords[0] == "follikuläre hyperkeratosen"
+    assert "hyperkeratose" not in keywords
+    assert "hyperkeratosen" not in keywords
+
+
+def test_a_longer_phrase_after_its_picked_part_is_kept(extractor):
+    # Only parts of a picked phrase are skipped, not phrases that extend a picked word: they
+    # are often the more specific term ("respiratory failure" -> "acute respiratory failure").
+    text = "Skin. Skin. Skin. Skin. Skin disease."
+    embed = _bag_of_words(["skin", "disease"])
+
+    keywords = extractor(text, embed, top_n=10)
+
+    assert keywords[0] == "skin"
+    assert "skin disease" in keywords
+
+
 def test_frequent_early_phrases_rank_first(extractor):
     # Every candidate is equally similar to the document here, so position and frequency decide.
     text = "Schauspielmusik und Schauspielmusik. Später kommt auch das Archiv vor."
@@ -154,3 +194,12 @@ def test_is_variant_allows_a_quarter_of_the_word_length():
     assert pos_ngrams._is_variant("skin disease", "skin diseases")
     assert not pos_ngrams._is_variant("skin", "skin disease")
     assert not pos_ngrams._is_variant("cat", "car")
+
+
+def test_is_part_of_needs_every_word_in_a_longer_phrase():
+    assert pos_ngrams._is_part_of("keratosis", "keratosis pilaris")
+    assert pos_ngrams._is_part_of("pilaris", "ungefährlichen keratosis pilaris")
+    assert pos_ngrams._is_part_of("hyperkeratose", "follikuläre hyperkeratosen")
+    assert not pos_ngrams._is_part_of("keratosis pilaris", "keratosis pilaris")
+    assert not pos_ngrams._is_part_of("keratosis pilaris", "keratosis")
+    assert not pos_ngrams._is_part_of("hyperkeratose", "keratosis pilaris")

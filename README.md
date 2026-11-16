@@ -154,7 +154,8 @@ curl --noproxy '*' -X POST http://localhost:8001/extract-iris \
    (`de_core_news_md`, `en_core_web_md`) only tags the parts of speech, per paragraph in its
    detected language. They are ranked by their similarity to the document (standardised within
    the document), with a bonus for an early first occurrence and for frequency and a penalty for
-   three-word phrases; near-duplicates and inflected variants of a picked keyword are skipped.
+   three-word phrases; near-duplicates, inflected variants and parts of a picked keyword
+   (`keratosis` after `keratosis pilaris`) are skipped.
    On 243 abstracts (chemistry, medicine, humanities; German and English) this agreed better with
    ChatGPT's keywords than single words: F1@10 0.23 vs. 0.14 with `multilingual-e5`
    (`evaluation/benchmark/`). The spaCy pipelines are loaded on the first such request.

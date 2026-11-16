@@ -63,8 +63,11 @@ The weights in `pos_ngrams.py` were tuned against ChatGPT's keywords on every ot
 of each set and checked on the rest (F1@10 vs. ChatGPT with `multilingual-e5`: 0.227 tuned,
 0.232 held out). Variants that scored lower and were dropped: KeyBERT on 1-3 word n-grams
 (0.06) or spaCy noun phrases (0.21), rare-word scoring with wordfreq (0.17-0.19), the same
-ranking on noun phrases (0.22), a sentence-mean document embedding, and dropping candidates
-contained in a picked keyword.
+ranking on noun phrases (0.22), a sentence-mean document embedding, and dropping phrases that
+extend a picked keyword or replacing the picked part by them (0.21). Skipping parts of a picked
+keyword (`keratosis` after `keratosis pilaris`) kept F1 vs. ChatGPT (0.227) and cut overlapping
+keywords from 4.4 to 1.6 pairs per document, but lowered F1 vs. the reference keywords from
+0.115 to 0.091 (these are mostly single words that a picked phrase now hides).
 
 ## Scoring
 
