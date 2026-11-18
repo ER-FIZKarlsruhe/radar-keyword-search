@@ -42,8 +42,13 @@ MODES = {
     "fuzzy": {},
 }
 
+# The service's candidate options (request field "candidates"): single words (default)
+# and phrases of up to three words. Every model runs with each of them.
+CANDIDATES = ["words", "pos-ngrams"]
+
 # One entry per research domain. "models" are keys of bert_models.BERT_MODEL_REGISTRY;
-# every model is run in every mode, so each dataset gets len(models) * len(MODES) runs.
+# every model is run with every candidate option in every mode, so each dataset gets
+# len(models) * len(CANDIDATES) * len(MODES) runs.
 DOMAINS = {
     "culture": {
         "oai_set": "radar4culture",
@@ -55,7 +60,8 @@ DOMAINS = {
     },
     "chem": {
         "oai_set": "radar4chem",
-        "terminology": "tib",
+        # GND as well: it has many general and technical terms NFDI4CHEM lacks ("Jupyter Notebook").
+        "terminology": "both",
         "ontology_collection": "NFDI4CHEM",
         # General scientific encoder next to the chemistry-specific one.
         "models": ["scibert", "chemicalbert"],

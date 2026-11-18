@@ -155,6 +155,87 @@ async def test_url_encodes_collection_ids_with_spaces():
     assert "classification=FAIR%20Data%20Spaces,NFDI4CHEM" in seen_urls[0]
 
 
+def _by_collection_client(in_collection, everywhere, seen_urls):
+    """TIB answering with `in_collection` docs for a collection-filtered search, else `everywhere`."""
+    def handler(request):
+        if request.method == "HEAD":
+            return httpx.Response(200)
+        seen_urls.append(str(request.url))
+        docs = in_collection if "classification=" in str(request.url) else everywhere
+        return httpx.Response(200, json={"response": {"docs": docs}})
+
+    return httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+
+RDM = {"iri": "https://example.org/rdm", "label": "research data management", "ontology_name": "t4fs"}
+DATA_MANAGEMENT = {"iri": "https://example.org/dm", "label": "Data management", "ontology_name": "edam"}
+
+
+async def test_searches_all_of_tib_when_the_collection_has_no_match():
+    seen_urls = []
+    async with _by_collection_client([DATA_MANAGEMENT], [RDM], seen_urls) as client:
+        result = await search_tib_best_match("research data management", None, "NFDI4CHEM", threshold=5, client=client)
+
+    assert len(seen_urls) == 2
+    assert "classification=" not in seen_urls[1]
+    assert result["iri"] == "https://example.org/rdm"
+    assert result["ontology_name"] == "t4fs"
+    assert result["matched"] is True
+    assert result["outside_collection"] is True
+
+
+async def test_keeps_the_collection_match_without_a_second_search():
+    seen_urls = []
+    async with _by_collection_client([RDM], [], seen_urls) as client:
+        result = await search_tib_best_match("research data management", None, "NFDI4CHEM", threshold=5, client=client)
+
+    assert len(seen_urls) == 1
+    assert result["matched"] is True
+    assert "outside_collection" not in result
+
+
+async def test_single_words_are_never_searched_outside_the_collection():
+    # A single word matches some term in one of TIB's hundreds of ontologies far too easily
+    # ("calculated", "reducing"); phrases are specific enough.
+    research = {"iri": "https://example.org/research", "label": "Research", "ontology_name": "eclas"}
+    seen_urls = []
+    async with _by_collection_client([], [research], seen_urls) as client:
+        result = await search_tib_best_match("research", None, "NFDI4CHEM", threshold=5, client=client)
+
+    assert len(seen_urls) == 1
+    assert result is None
+
+
+async def test_prefers_the_collection_candidate_when_neither_matches():
+    # Equally far in both searches: the collection's candidate is reported.
+    in_collection = {"iri": "https://example.org/in", "label": "research data mgmt"}
+    elsewhere = {"iri": "https://example.org/out", "label": "research data mgmt"}
+    seen_urls = []
+    async with _by_collection_client([in_collection], [elsewhere], seen_urls) as client:
+        result = await search_tib_best_match("research data management", None, "NFDI4CHEM", threshold=5, client=client)
+
+    assert len(seen_urls) == 2
+    assert result["matched"] is False
+    assert result["iri"] == "https://example.org/in"
+
+
+async def test_an_explicit_ontology_is_never_left():
+    seen_urls = []
+    async with _by_collection_client([], [RDM], seen_urls) as client:
+        result = await search_tib_best_match("research data management", "edam", "NFDI4CHEM", threshold=5, client=client)
+
+    assert len(seen_urls) == 1
+    assert result is None
+
+
+async def test_no_second_search_without_a_collection():
+    seen_urls = []
+    async with _by_collection_client([], [DATA_MANAGEMENT], seen_urls) as client:
+        await search_tib_best_match("research data management", None, None, threshold=5, client=client)
+
+    assert len(seen_urls) == 1
+
+
 def _collections_client(ids, status=200):
     calls = []
 

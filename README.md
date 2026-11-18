@@ -14,8 +14,11 @@ This service extracts keywords from documents with a local BERT model (PubMedBER
 ```bash
 docker run -d --name radar-keyword-search \
   -p 8000:8000 \
-  docker.dev.fiz-karlsruhe.de/radar-keyword-search:0.1
+  <registry>/radar-keyword-search:0.1
 ```
+
+`<registry>` is the Docker registry the image was pushed to (or use an image built yourself, see
+[Building the Image Yourself](#4-building-the-image-yourself)).
 
 This needs no external services besides the terminology APIs. Startup is slow while the default
 BERT model (PubMedBERT) downloads/loads — check
@@ -65,7 +68,7 @@ Each request can pick a model with the `model` field; `GET /models` lists the av
 docker run -d --name radar-keyword-search \
   -p 8000:8000 \
   -e BERT_MODEL=gbert \
-  docker.dev.fiz-karlsruhe.de/radar-keyword-search:0.1
+  <registry>/radar-keyword-search:0.1
 ```
 
 * `BERT_MODEL`: optional, defaults to `pubmedbert`. The default model is loaded at startup, any
@@ -163,12 +166,18 @@ curl --noproxy '*' -X POST http://localhost:8001/extract-iris \
 2. **IRI Linking** (chosen per request via `terminology`):
 
    * `tib` (default): each keyword is searched in the TIB Terminology API (optionally scoped by
-     `ontology` / `ontology_collection`). The closest label/synonym by Hamming distance wins; it is
-     `matched` if the distance is within the allowed distance (see `max_distance` below) and its IRI isn't provably dead:
+     `ontology` / `ontology_collection`). The closest label/synonym by edit distance wins; it is
+     `matched` if it is close enough (see "Allowed distance" below) and its IRI isn't provably dead:
      only a HEAD answer of 404/410, or a host that can't be resolved or refuses the connection,
      drops the match. Other statuses and timeouts keep it, since hosts behind bot protection
      (e.g. `www.loc.gov` for PREMIS terms) answer automated requests with 403, a 503 challenge
      or by stalling. Every non-200 answer is logged.
+     For phrases, a collection without an `ontology` only narrows the search: if no term in it is
+     close enough, all of TIB is searched as well, since collections lack many general terms
+     (`research data management` is in t4fs, not in NFDI4CHEM). Such a match carries
+     `"outside_collection": true` and loses every tie, also against the GND. Single words stay in
+     the collection: among all of TIB's ontologies they match some term far too easily
+     (`calculated`, `reducing`). An explicit `ontology` is never left.
    * `gnd`: each keyword is searched in the GND via lobid-gnd, restricted to the types in
      `GND_TYPES`. The closest preferred/variant name wins (on a tie, the type listed first in
      `GND_TYPES`); it is `matched` if the distance is within the allowed distance (no HEAD check - lobid only
@@ -179,16 +188,22 @@ curl --noproxy '*' -X POST http://localhost:8001/extract-iris \
        `Goethe, Johann Wolfgang von`. With the default `candidates: words` the extractor only
        produces single words, so person matches only occur with `pos-ngrams`.
    * `both`: both lookups run in parallel; a matched candidate beats an unmatched one, then the
-     smaller distance wins, and on a tie TIB wins.
+     smaller distance wins. On a tie a TIB term from outside the collection loses; otherwise the GND wins for German documents (it is a German authority
+     file) and TIB for all others (mostly English ontologies); the document's language is guessed
+     from its stop words.
    * `none`: no lookup at all, the service makes no outgoing request; every keyword is
      returned with the value `null`. For clients that only need the keywords.
-   * Allowed distance: a quarter of the keyword's length (rounded down), and at most
-     `max_distance` (default 5). Keywords under 4 letters need an exact match, 4–7 letters may
+   * Allowed distance: the edit (Levenshtein) distance, ignoring case, may be at most a quarter
+     of the keyword's length (rounded down), and at most `max_distance` (default 5). A phrase must
+     also match word by word (hyphens separate words too): the same number of words, each within a
+     quarter of its length, so
+     `digital edition` matches `Digitale Edition`, but `periodic dft` doesn't match `Periodic` and
+     `computational details` doesn't match `Computational physics`. Keywords under 4 letters need an exact match, 4–7 letters may
      differ by 1, 8–11 by 2, and so on. This accepts small edits such as `nanoparticles` →
      `nanoparticle` or `gluck` → `Glück`. It rejects what a fixed threshold of 5 let through:
      any term for a short keyword (`hier` → `usko`) and a keyword plus extra words (`witches` →
-     `Witches game`; the Hamming distance pads the shorter string, so such a prefix match only
-     costs the extra characters). `"max_distance": 0` accepts exact matches only (ignoring case).
+     `Witches game`). Before, the Hamming distance compared position by position, so one inserted
+     letter made every later character differ. `"max_distance": 0` accepts exact matches only (ignoring case).
      The closest candidate is always returned, with `matched: false` when it is too far.
    * The GND is German: English keywords from English-only models (e.g. `music`) rarely hit a GND
      heading (`Musik`) exactly. Prefer a German or multilingual model (`gbert`,
@@ -223,11 +238,11 @@ curl --noproxy '*' -X POST http://localhost:8001/extract-iris \
   "document": "Text to extract keywords from, at most MAX_DOCUMENT_CHARS (default 100000) characters",
   "terminology": "Optional: tib (default) | gnd | both | none; none = keywords only, no TIB/GND request",
   "ontology": "Optional TIB ontology id(s) for filtering (e.g., et); TIB only",
-  "ontology_collection": "Optional TIB collection id(s) (e.g., NFDI4CHEM); TIB only",
+  "ontology_collection": "Optional TIB collection id(s) (e.g., NFDI4CHEM); TIB only; without ontology, phrases fall back to all of TIB (outside_collection: true)",
   "model": "Optional BERT model name, see GET /models",
   "max_keywords": "Optional, 1-20, default 10",
   "candidates": "Optional: words (default, single words) | pos-ngrams (phrases of up to three words)",
-  "max_distance": "Optional, 0-5, default 5; 0 = exact matches only; shorter keywords get less (a quarter of their length)"
+  "max_distance": "Optional, 0-5, default 5; edit distance; 0 = exact matches only; shorter keywords get less (a quarter of their length); phrases must match word by word"
 }
 ```
 
@@ -272,9 +287,29 @@ curl --noproxy '*' -X POST http://localhost:8001/extract-iris \
 * `keyword_scheme`, `scheme_uri`, `classification_code`: ready-made values for a RADAR keyword's
   `keywordScheme` (`GND` / `Other`), `schemeURI` and `classificationCode` attributes.
 * `label`: the term's preferred label; `best_term`: the label or synonym/variant that actually matched.
+* `outside_collection`: only present (`true`) on a TIB term found outside the requested
+  `ontology_collection` (see above).
 
 > The value is `null` if the search failed or returned no candidates at all, and always with
 > `"terminology": "none"` (keywords only, no TIB/GND request).
+
+---
+
+## 🔄 API Changes Since 10 November 2026
+
+All changes are backwards compatible: new request fields are optional and their defaults keep the
+previous behaviour, the response keeps its shape. Which terms match can still differ, because the
+matching rules changed.
+
+* Request: new field `candidates` (`words` (default) | `pos-ngrams`).
+* Request: `terminology` accepts `none` (keywords only, every value `null`, no TIB/GND request).
+* Request: `max_distance` keeps its range (0-5) but now limits the edit (Levenshtein) distance
+  instead of the Hamming distance, and phrases must match word by word (see "Allowed distance").
+* Request: with `ontology_collection` and no `ontology`, phrases fall back to all of TIB when no
+  term in the collection is close enough.
+* Response: optional field `outside_collection: true` on such fallback matches.
+* `both`: ties go to the GND for German documents and to TIB otherwise; a fallback match loses
+  every tie.
 
 ---
 
@@ -329,7 +364,7 @@ pytest -q --cov=iri_api --cov-report=term-missing
 > Run the commands above from PowerShell or Command Prompt instead (using Windows Python,
 > e.g. Anaconda's), or Git Bash.
 
-This covers the keyword ranking (`keyword_extraction.py`, `pos_ngrams.py`), `hamming_distance`, `check_iri_exists`,
+This covers the keyword ranking (`keyword_extraction.py`, `pos_ngrams.py`), `edit_distance`, `words_match`, `check_iri_exists`,
 `search_tib_best_match`, the GND lookup, and `/extract-iris` (success, error, and edge cases).
 
 ### Integration Tests

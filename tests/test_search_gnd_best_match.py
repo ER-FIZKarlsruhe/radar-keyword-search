@@ -214,3 +214,13 @@ def test_pick_better_match_prefers_matched_then_distance_then_first():
     assert pick_better_match(None, gnd) is gnd
     assert pick_better_match(tib, None) is tib
     assert pick_better_match(None, None) is None
+
+
+def test_pick_better_match_a_term_from_outside_the_collection_loses_a_tie():
+    # "enigma": the GND's cipher machine, not EnIGMA from some ontology outside the collection.
+    tib = {"source": "tib", "matched": True, "distance": 0, "outside_collection": True}
+    gnd = {"source": "gnd", "matched": True, "distance": 0}
+    assert pick_better_match(tib, gnd) is gnd
+
+    gnd = {"source": "gnd", "matched": True, "distance": 1}
+    assert pick_better_match(tib, gnd) is tib  # a closer match still wins

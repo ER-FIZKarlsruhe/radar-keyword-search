@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import os
+import re
 import sys
 import time
 
@@ -47,7 +48,7 @@ _startup_log("Libraries imported.")
 
 from bert_models import BERT_MODEL_REGISTRY
 from keyword_extraction import KeywordExtractor
-from pos_ngrams import PosNgramExtractor
+from pos_ngrams import PosNgramExtractor, detect_language
 from stop_words import STOP_WORDS
 
 app = FastAPI()
@@ -164,7 +165,7 @@ _startup_log("Startup complete, uvicorn will now open the port.")
 # -------------------------------
 # Supporting Functions
 # -------------------------------
-HAMMING_THRESHOLD = 5
+MAX_DISTANCE = 5
 
 # A match may differ from the keyword in at most one character per this many keyword
 # characters. Without it, the fixed threshold of 5 accepted *any* term for a keyword of
@@ -175,16 +176,49 @@ CHARS_PER_ALLOWED_DIFFERENCE = 4
 
 
 def allowed_distance(keyword: str, threshold: int) -> int:
-    """Largest Hamming distance at which `keyword` counts as matched: a quarter of its
+    """Largest edit distance at which `keyword` counts as matched: a quarter of its
     length (rounded down), and never more than `threshold` (the request's max_distance)."""
     return min(threshold, len(keyword.strip()) // CHARS_PER_ALLOWED_DIFFERENCE)
 
 
-def hamming_distance(s1, s2):
-    max_len = max(len(s1), len(s2))
-    s1 = s1.ljust(max_len)
-    s2 = s2.ljust(max_len)
-    return sum(el1 != el2 for el1, el2 in zip(s1.lower(), s2.lower()))
+def edit_distance(s1: str, s2: str) -> int:
+    """Levenshtein distance, ignoring case. Unlike the Hamming distance used before, an
+    inserted or dropped letter costs 1 instead of shifting every later character
+    ("digital edition" -> "Digitale Edition")."""
+    a, b = s1.lower(), s2.lower()
+    if len(a) < len(b):
+        a, b = b, a
+    previous = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        current = [i]
+        for j, cb in enumerate(b, 1):
+            current.append(min(previous[j] + 1, current[j - 1] + 1, previous[j - 1] + (ca != cb)))
+        previous = current
+    return previous[-1]
+
+
+def words_match(keyword: str, term: str) -> bool:
+    """Same number of words, each within a quarter of the keyword word's length. Keeps a
+    phrase's allowance from going to one word ("computational details" is not
+    "Computational physics") or to extra words ("periodic dft" is not "Periodic"). Hyphens
+    separate words too, else "o2-reactivity" would match "Reactivity"."""
+    kw_words, term_words = _words(keyword), _words(term)
+    return len(kw_words) == len(term_words) and all(
+        edit_distance(k, t) <= len(k) // CHARS_PER_ALLOWED_DIFFERENCE for k, t in zip(kw_words, term_words))
+
+
+def _words(text: str) -> list:
+    return [w for w in re.split(r"[\s-]+", text) if w]
+
+
+def is_close(keyword: str, term: str, distance: int, threshold: int) -> bool:
+    """Whether a candidate at `distance` counts as matched (before any IRI check)."""
+    return distance <= allowed_distance(keyword, threshold) and words_match(keyword, term)
+
+
+def _candidate_rank(keyword: str, term: str, distance: int) -> tuple:
+    # Candidates that could match word by word come first, then the closer one.
+    return (not words_match(keyword, term), distance)
 
 # Only these answers prove an IRI dead. Anything else is no proof either way and keeps the match:
 # hosts behind bot protection answer automated requests with 403 (www.loc.gov, which hosts the
@@ -251,25 +285,12 @@ async def resolve_collection_ids(ontology_collection: Optional[str], client: htt
     return ",".join(known.get(p.lower(), p.upper()) for p in parts)
 
 
-async def search_tib_best_match(keyword: str, ontology: Optional[str],  ontology_collection: Optional[str], threshold: int, client: httpx.AsyncClient) -> Optional[Dict]:
-    """Find the TIB term closest to `keyword` and report how close it was.
-
-    Always returns the globally closest candidate (with its distance and a
-    `matched` flag for whether it cleared `threshold`) as long as at least one
-    candidate was found at all, so callers can show a match-quality rating
-    even for keywords that end up used as free text. Returns None only when
-    the TIB search itself failed or returned no candidates whatsoever.
-    """
-    encoded_kw = quote(keyword)
-    url = f"https://api.terminology.tib.eu/api/search?q={encoded_kw}"
-    if ontology:
-        url += f"&ontology={ontology}"
-
-    if ontology_collection:
-        # Expected to already be in TIB's exact casing - see resolve_collection_ids.
-        url += f"&schema=collection&classification={quote(ontology_collection, safe=',')}"
+TIB_SEARCH_URL = "https://api.terminology.tib.eu/api/search"
 
 
+async def _tib_closest_candidate(keyword: str, url: str, client: httpx.AsyncClient) -> Optional[Dict]:
+    """The TIB term closest to `keyword` among one search's results, without the `matched`
+    flag; None if the search failed or found nothing."""
     print(f"TIB request url: {url}")
 
     try:
@@ -284,7 +305,7 @@ async def search_tib_best_match(keyword: str, ontology: Optional[str],  ontology
 
     data = response.json()
     best_match = None
-    best_distance = float('inf')
+    best_rank = None
 
     # Textual closeness is ranked across every candidate term first, regardless of whether its
     # IRI currently resolves - checking that per-candidate up front (as this used to do) meant a
@@ -303,9 +324,10 @@ async def search_tib_best_match(keyword: str, ontology: Optional[str],  ontology
                 terms.extend(doc["synonym"])
 
             for term in terms:
-                dist = hamming_distance(keyword, term)
-                if dist < best_distance:
-                    best_distance = dist
+                dist = edit_distance(keyword, term)
+                rank = _candidate_rank(keyword, term, dist)
+                if best_rank is None or rank < best_rank:
+                    best_rank = rank
                     scheme_uri, last_segment = _split_iri(iri)
                     best_match = {
                         "iri": iri,
@@ -318,6 +340,45 @@ async def search_tib_best_match(keyword: str, ontology: Optional[str],  ontology
                         "scheme_uri": scheme_uri,
                         "classification_code": doc.get("short_form") or last_segment,
                     }
+    return best_match
+
+
+async def search_tib_best_match(keyword: str, ontology: Optional[str],  ontology_collection: Optional[str], threshold: int, client: httpx.AsyncClient) -> Optional[Dict]:
+    """Find the TIB term closest to `keyword` and report how close it was.
+
+    Always returns the globally closest candidate (with its distance and a
+    `matched` flag for whether it cleared `threshold`) as long as at least one
+    candidate was found at all, so callers can show a match-quality rating
+    even for keywords that end up used as free text. Returns None only when
+    the TIB search itself failed or returned no candidates whatsoever.
+
+    A collection (without an explicit ontology) only narrows the search for phrases: if
+    nothing in it is close enough, all of TIB is searched as well, since collections lack
+    many general terms ("research data management" is in t4fs, not in NFDI4CHEM). Such a
+    candidate is marked `outside_collection` and loses every tie. Single words stay in the
+    collection: among TIB's hundreds of ontologies they match some term far too easily
+    ("calculated", "reducing"). An explicit ontology is never left.
+    """
+    url = f"{TIB_SEARCH_URL}?q={quote(keyword)}"
+    if ontology:
+        url += f"&ontology={ontology}"
+
+    best_match = None
+    if ontology_collection:
+        # Expected to already be in TIB's exact casing - see resolve_collection_ids.
+        collection_url = url + f"&schema=collection&classification={quote(ontology_collection, safe=',')}"
+        best_match = await _tib_closest_candidate(keyword, collection_url, client)
+
+    def close(match: Optional[Dict]) -> bool:
+        return match is not None and is_close(keyword, match["best_term"], match["distance"], threshold)
+
+    if not ontology_collection:
+        best_match = await _tib_closest_candidate(keyword, url, client)
+    elif not ontology and not close(best_match) and len(keyword.split()) >= 2:
+        candidate = await _tib_closest_candidate(keyword, url, client)
+        if candidate is not None and (best_match is None or (not close(candidate), candidate["distance"])
+                                      < (not close(best_match), best_match["distance"])):
+            best_match = {**candidate, "outside_collection": True}
 
     if not best_match:
         return None
@@ -325,10 +386,7 @@ async def search_tib_best_match(keyword: str, ontology: Optional[str],  ontology
     # Only the winning candidate's IRI needs a liveness check (also cheaper than checking every
     # candidate up front, as before). A match can still be "matched" quality-wise while lacking a
     # usable link, if that one IRI doesn't resolve.
-    best_match["matched"] = (
-        best_match["distance"] <= allowed_distance(keyword, threshold)
-        and await check_iri_exists(best_match["iri"], client)
-    )
+    best_match["matched"] = close(best_match) and await check_iri_exists(best_match["iri"], client)
     return best_match
 
 
@@ -408,7 +466,7 @@ def _gnd_candidate_terms(keyword: str, member: Dict) -> list:
 async def search_gnd_best_match(keyword: str, threshold: int, client: httpx.AsyncClient) -> Optional[Dict]:
     """Find the GND entity closest to `keyword`, analogous to search_tib_best_match.
 
-    Same return contract: the closest candidate (by Hamming distance over the preferred
+    Same return contract: the closest candidate (by edit distance over the preferred
     name and all variant names; on a tie, the type listed first in GND_TYPES wins) with a
     `matched` flag, or None if the search failed or found nothing. Unlike TIB, no extra HEAD request is made against the winning IRI:
     lobid only returns live GND records, and https://d-nb.info/gnd/... merely redirects to
@@ -432,7 +490,7 @@ async def search_gnd_best_match(keyword: str, threshold: int, client: httpx.Asyn
         return None
 
     best_match = None
-    best_key = (float("inf"), float("inf"))
+    best_key = None
     for member in data.get("member") or []:
         iri = member.get("id")
         preferred = member.get("preferredName")
@@ -440,9 +498,10 @@ async def search_gnd_best_match(keyword: str, threshold: int, client: httpx.Asyn
             continue
         rank = _gnd_type_rank(member)
         for term in _gnd_candidate_terms(keyword, member):
-            dist = hamming_distance(keyword, term)
-            if (dist, rank) < best_key:
-                best_key = (dist, rank)
+            dist = edit_distance(keyword, term)
+            key = (*_candidate_rank(keyword, term, dist), rank)
+            if best_key is None or key < best_key:
+                best_key = key
                 best_match = {
                     "iri": iri,
                     "label": preferred,
@@ -457,22 +516,25 @@ async def search_gnd_best_match(keyword: str, threshold: int, client: httpx.Asyn
 
     if not best_match:
         return None
-    best_match["matched"] = best_match["distance"] <= allowed_distance(keyword, threshold)
+    best_match["matched"] = is_close(keyword, best_match["best_term"], best_match["distance"], threshold)
     return best_match
 
 
 def pick_better_match(a: Optional[Dict], b: Optional[Dict]) -> Optional[Dict]:
     """Choose between two candidates for one keyword (terminology="both").
 
-    A matched candidate beats an unmatched one, then the smaller distance wins. On a tie
-    the first argument wins - extract_iris passes TIB first, since its ontologies are the
-    ones scoped to the workspace's domain.
+    A matched candidate beats an unmatched one, then the smaller distance wins. On a tie a
+    TIB term found outside the requested collection loses (see search_tib_best_match);
+    otherwise the first argument wins - extract_iris passes the GND first for German documents (it is
+    a German authority file) and TIB first otherwise (its ontologies are mostly English and
+    the ones scoped to the workspace's domain).
     """
     if a is None or b is None:
         return a or b
-    if a["matched"] != b["matched"]:
-        return a if a["matched"] else b
-    return a if a["distance"] <= b["distance"] else b
+    def key(match: Dict) -> tuple:
+        return (not match["matched"], match["distance"], bool(match.get("outside_collection")))
+
+    return a if key(a) <= key(b) else b
 
 async def _none() -> None:
     return None
@@ -527,18 +589,21 @@ class DocumentRequest(BaseModel):
     model: Optional[str] = None
     max_keywords: Optional[int] = Field(default=None, ge=1, le=20)
     # Where the extracted keywords are looked up: the TIB Terminology Service, the GND,
-    # or both (the better match per keyword wins). ontology/ontology_collection only
-    # apply to TIB. "none" skips the lookup: keywords only, every value null.
+    # or both (the better match per keyword wins; on a tie the GND for German documents,
+    # else TIB). ontology/ontology_collection only apply to TIB; for phrases, a collection
+    # without an ontology falls back to all of TIB when nothing in it is close enough (such a
+    # match is marked outside_collection and loses ties). "none" skips the lookup: keywords
+    # only, every value null.
     terminology: Literal["tib", "gnd", "both", "none"] = "tib"
     # What the keywords are made of: "words" ranks the document's single words by their
     # similarity to the document (KeyBERT); "pos-ngrams" ranks phrases of up to three words
     # and prefers early, frequent and diverse ones (see pos_ngrams.py).
     candidates: Literal["words", "pos-ngrams"] = "words"
-    # Accept a match only up to this Hamming distance; 0 = exact matches only (ignoring
-    # case). Defaults to HAMMING_THRESHOLD. Shorter keywords get less (see
-    # allowed_distance). Closer candidates are still reported with matched=false, so
-    # clients can show how close they were.
-    max_distance: Optional[int] = Field(default=None, ge=0, le=HAMMING_THRESHOLD)
+    # Accept a match only up to this edit (Levenshtein) distance; 0 = exact matches only
+    # (ignoring case). Defaults to MAX_DISTANCE. Shorter keywords get less, and a
+    # phrase must match word by word (see allowed_distance, words_match). Closer candidates
+    # are still reported with matched=false, so clients can show how close they were.
+    max_distance: Optional[int] = Field(default=None, ge=0, le=MAX_DISTANCE)
 
 # -------------------------------
 # Endpoint
@@ -569,16 +634,18 @@ async def extract_iris(req: DocumentRequest) -> Dict[str, Optional[Dict]]:
             # Keywords only: no HTTP client, so nothing reaches TIB, GND or any IRI host.
             return dict.fromkeys(keyword_list)
 
-        threshold = HAMMING_THRESHOLD if req.max_distance is None else req.max_distance
+        threshold = MAX_DISTANCE if req.max_distance is None else req.max_distance
         use_tib = req.terminology in ("tib", "both")
         use_gnd = req.terminology in ("gnd", "both")
+
+        prefer_gnd = use_tib and use_gnd and detect_language(req.document) == "de"
 
         async def lookup(kw: str, ontology_collection: Optional[str]) -> Optional[Dict]:
             tib, gnd = await asyncio.gather(
                 search_tib_best_match(kw, req.ontology, ontology_collection, threshold, client) if use_tib else _none(),
                 search_gnd_best_match(kw, threshold, client) if use_gnd else _none(),
             )
-            return pick_better_match(tib, gnd)
+            return pick_better_match(gnd, tib) if prefer_gnd else pick_better_match(tib, gnd)
 
         async with httpx.AsyncClient() as client:
             ontology_collection = await resolve_collection_ids(req.ontology_collection, client) if use_tib else None

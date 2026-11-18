@@ -1,13 +1,14 @@
 # Keyword benchmark
 
-Compares keyword extraction methods against reference keywords, without the service and
-without any TIB/GND lookup: which method picks the keywords a human (or an LLM) would pick?
+Compares keyword extraction methods against reference keywords, through a running keyword
+service but without any TIB/GND lookup: which method picks the keywords a human (or an LLM)
+would pick?
 
 | Step | Script | Output |
 |------|--------|--------|
 | 1. Download the sources once | see below | `$KEYWORD_BENCHMARK_DIR/raw/` |
 | 2. Build the sets | `prepare.py [--per-set 30] [--seed 42]` | `$KEYWORD_BENCHMARK_DIR/sets/<set>.jsonl` |
-| 3. Run the comparison | `run.py [--model multilingual-e5] [--sets …] [--methods …]` | table on stdout, `results/benchmark_<model>_<timestamp>.json` |
+| 3. Run the comparison | `run.py [--service-url URL] [--model multilingual-e5] [--sets …] [--methods …]` | table on stdout, `results/benchmark_<model>_<timestamp>.json` |
 
 `KEYWORD_BENCHMARK_DIR` defaults to `../data/benchmarks` (`evaluation/data/`, git-ignored). The data
 must never be committed: the repository is public and KPBiomed may not be redistributed
@@ -52,7 +53,9 @@ the default `--per-set 30 --seed 42` and unchanged sources; otherwise new ChatGP
 
 ## Methods
 
-The service's two `candidates` options, run in-process with the service's own code:
+The service's two `candidates` options. `run.py` sends every document once per option to
+`POST /extract-iris` (`terminology: none`, 10 keywords), so it measures the code the service
+actually runs; check that the service is up to date with the working tree first.
 
 | Method | Candidates | Ranking |
 |--------|------------|---------|
@@ -78,8 +81,10 @@ by at most a quarter of the word's length (edit distance), ignoring case and GND
 
 ## Requirements
 
-The service's `requirements.txt`. On the development host, download models with
-`HF_HUB_DISABLE_XET=1` (see `CLAUDE.md`).
+Python 3 standard library only, and a running keyword service: by default
+`http://localhost:8000`, otherwise `--service-url` or `KEYWORD_BENCHMARK_SERVICE_URL`. The first
+request for a model makes the service download and load it. Failed requests are reported,
+recorded under `errors` in the result file and scored as empty keyword lists.
 
 ## Comparison with ChatGPT
 

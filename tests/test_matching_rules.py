@@ -93,6 +93,8 @@ def _gnd(name):
         ("witches", "Witches game"),    # keyword + extra word
         ("beethoven", "Beethoven Duo"),
         ("results", "results in"),
+        ("periodic dft", "Periodic"),   # a prefix of the phrase
+        ("computational details", "Computational physics"),
     ],
 )
 async def test_tib_rejects_matches_that_differ_too_much_for_the_keyword_length(keyword, label):
@@ -100,8 +102,7 @@ async def test_tib_rejects_matches_that_differ_too_much_for_the_keyword_length(k
         result = await search_tib_best_match(keyword, None, None, threshold=5, client=client)
 
     assert result["best_term"] == label
-    assert result["distance"] <= 5  # within the old fixed threshold ...
-    assert result["matched"] is False  # ... but no longer accepted
+    assert result["matched"] is False
 
 
 @pytest.mark.parametrize(
@@ -111,6 +112,14 @@ async def test_tib_rejects_matches_that_differ_too_much_for_the_keyword_length(k
 async def test_tib_still_accepts_small_edits(keyword, label):
     async with _tib(label) as client:
         result = await search_tib_best_match(keyword, None, None, threshold=5, client=client)
+
+    assert result["distance"] == 1
+    assert result["matched"] is True
+
+
+async def test_multi_word_terms_match_despite_an_inserted_letter():
+    async with _gnd("Digitale Edition") as client:
+        result = await search_gnd_best_match("digital edition", threshold=5, client=client)
 
     assert result["distance"] == 1
     assert result["matched"] is True

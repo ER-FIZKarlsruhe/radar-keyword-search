@@ -36,7 +36,7 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
-from config import DOMAINS, EVAL_DIR, MAX_KEYWORDS, MODES, RESULTS_DIR, SERVICE_URL
+from config import CANDIDATES, DOMAINS, EVAL_DIR, MAX_KEYWORDS, MODES, RESULTS_DIR, SERVICE_URL
 from records import document_text, load_datasets
 
 SCHEMA_VERSION = 1
@@ -87,10 +87,16 @@ def extract(payload: dict) -> dict:
     return result
 
 
-def run_domain(domain: str, limit: int, require_abstract: bool, models, seed=None) -> Path:
+def run_id(model: str, candidates: str, mode: str) -> str:
+    # "words" runs keep the ids of result files written before the candidates option existed.
+    return f"{model}/{mode}" if candidates == "words" else f"{model}+{candidates}/{mode}"
+
+
+def run_domain(domain: str, limit: int, require_abstract: bool, models, seed=None, candidate_options=None) -> Path:
     """seed=None takes the first `limit` datasets; otherwise a random sample drawn with that seed."""
     config = DOMAINS[domain]
     models = models or config["models"]
+    candidate_options = candidate_options or CANDIDATES
 
     candidates = [d for d in load_datasets(config["oai_set"]) if d["abstract"] or not require_abstract]
     if seed is None:
@@ -99,15 +105,18 @@ def run_domain(domain: str, limit: int, require_abstract: bool, models, seed=Non
         datasets = random.Random(seed).sample(candidates, min(limit, len(candidates)))
     runs = []
     for model in models:
-        for mode, mode_params in MODES.items():
-            request = {
-                "model": model,
-                "max_keywords": MAX_KEYWORDS,
-                "terminology": config["terminology"],
-                "ontology_collection": config["ontology_collection"],
-                **mode_params,
-            }
-            runs.append({"id": f"{model}/{mode}", "model": model, "mode": mode, "request": request})
+        for option in candidate_options:
+            for mode, mode_params in MODES.items():
+                request = {
+                    "model": model,
+                    "candidates": option,
+                    "max_keywords": MAX_KEYWORDS,
+                    "terminology": config["terminology"],
+                    "ontology_collection": config["ontology_collection"],
+                    **mode_params,
+                }
+                runs.append({"id": run_id(model, option, mode), "model": model, "candidates": option,
+                             "mode": mode, "request": request})
 
     output = {
         "schema_version": SCHEMA_VERSION,
@@ -158,6 +167,8 @@ def main() -> None:
     parser.add_argument("--limit", type=int, default=10, help="number of datasets per domain (default: 10)")
     parser.add_argument("--require-abstract", action="store_true", help="skip datasets without an abstract")
     parser.add_argument("--models", nargs="+", help="override the domain's configured models")
+    parser.add_argument("--candidates", nargs="+", choices=CANDIDATES,
+                        help=f"candidate options to run (default: {' '.join(CANDIDATES)})")
     parser.add_argument("--random", action="store_true", help="draw --limit datasets at random instead of the first ones")
     parser.add_argument("--seed", type=int, help="seed for --random, to repeat a sample (default: a new random seed, stored in the result)")
     args = parser.parse_args()
@@ -166,7 +177,7 @@ def main() -> None:
     if unknown:
         parser.error(f"unknown domain(s): {', '.join(sorted(unknown))}")
     for domain in args.domains or DOMAINS:
-        run_domain(domain, args.limit, args.require_abstract, args.models, seed)
+        run_domain(domain, args.limit, args.require_abstract, args.models, seed, args.candidates)
 
 
 if __name__ == "__main__":

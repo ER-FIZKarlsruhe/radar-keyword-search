@@ -15,12 +15,12 @@ document and optionally links them to TIB Terminology Service and/or GND (lobid-
 
 | File | Role |
 |------|------|
-| `iri_api.py` | API, BERT model cache, TIB/GND lookup, matching rules (`hamming_distance`, `allowed_distance`) |
+| `iri_api.py` | API, BERT model cache, TIB/GND lookup, matching rules (`edit_distance`, `words_match`, `allowed_distance`) |
 | `keyword_extraction.py` | KeyBERT algorithm ported from keybert 0.9.0 (cosine ranking against the document embedding) |
 | `bert_models.py` | Registry of selectable BERT models (`GET /models`) |
 | `pos_ngrams.py` | Phrase keywords of up to 3 words (`candidates: pos-ngrams`): spaCy POS tags for candidates, tuned re-ranking of the BERT similarities |
 | `stop_words.py` | German + English stop words |
-| `evaluation/` | Scripts that harvest RADAR metadata and evaluate the deployed service; `evaluation/benchmark/` scores the extraction alone |
+| `evaluation/` | Scripts that harvest RADAR metadata and evaluate the deployed service; `evaluation/benchmark/` scores the extraction alone (via the service, without TIB/GND) |
 | `evaluation/data/` | Git-ignored test data: RADAR harvest, benchmark sets and raw downloads, ChatGPT answers. Never commit or copy it into tracked files (public repo; KPBiomed is CC BY-NC) |
 | `NOTICE` | Third-party attributions; update it whenever a dependency or data set with attribution duties is added |
 
@@ -112,8 +112,9 @@ docker exec -u root radar-keyword-search rm -f /tmp/script.py   # docker cp file
 - Long German texts often exceed BERT's 512 tokens; the document embedding is then truncated.
 
 For larger experiments, prefer the keyword benchmark (`evaluation/benchmark/`, see its
-README): it runs both `candidates` options in-process in the local venv (after installing the
-service's requirements) and scores them against reference and ChatGPT keywords.
+README): it sends every document to the local service container (`localhost:8000`) with both
+`candidates` options and scores them against reference and ChatGPT keywords. Rebuild the
+container first if the working tree has changed.
 
 ## Licensing of dependencies
 

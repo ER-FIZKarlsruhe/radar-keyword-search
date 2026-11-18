@@ -125,6 +125,45 @@ def _fake_lookups(monkeypatch, calls, tib_result=None, gnd_result=None):
     monkeypatch.setattr(iri_api, "resolve_collection_ids", fake_resolve)
 
 
+def _both_match(monkeypatch, language):
+    iri_api.kw_model.extract_keywords.return_value = [("edition", 0.9)]
+    tib = {"source": "tib", "matched": True, "distance": 0}
+    gnd = {"source": "gnd", "matched": True, "distance": 0}
+    _fake_lookups(monkeypatch, [], tib_result=tib, gnd_result=gnd)
+    monkeypatch.setattr(iri_api, "detect_language", lambda text: language)
+
+
+def test_both_prefers_gnd_on_a_tie_for_german_documents(monkeypatch):
+    _both_match(monkeypatch, "de")
+
+    with _client() as client:
+        response = client.post("/extract-iris", json={"document": "Die Edition", "terminology": "both"})
+
+    assert response.json()["edition"]["source"] == "gnd"
+
+
+def test_both_prefers_tib_on_a_tie_for_other_documents(monkeypatch):
+    for language in ("en", None):
+        _both_match(monkeypatch, language)
+
+        with _client() as client:
+            response = client.post("/extract-iris", json={"document": "The edition", "terminology": "both"})
+
+        assert response.json()["edition"]["source"] == "tib"
+
+
+def test_a_closer_match_still_beats_the_language_preference(monkeypatch):
+    _both_match(monkeypatch, "de")
+    tib = {"source": "tib", "matched": True, "distance": 0}
+    gnd = {"source": "gnd", "matched": True, "distance": 1}
+    _fake_lookups(monkeypatch, [], tib_result=tib, gnd_result=gnd)
+
+    with _client() as client:
+        response = client.post("/extract-iris", json={"document": "Die Edition", "terminology": "both"})
+
+    assert response.json()["edition"]["source"] == "tib"
+
+
 def test_extract_iris_defaults_to_tib_only(monkeypatch):
     iri_api.kw_model.extract_keywords.return_value = [("edition", 0.9)]
     calls = []

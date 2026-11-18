@@ -281,12 +281,19 @@ def _stats_table(stats: Dict) -> str:
     )
 
 
+def _engine(run: Dict) -> str:
+    """Model plus candidate option: what extracts the keywords. Exact and fuzzy runs of one
+    engine differ only in linking. Older result files have no candidate option (= words)."""
+    candidates = run.get("candidates", "words")
+    return run["model"] if candidates == "words" else f"{run['model']}+{candidates}"
+
+
 def _charts(data: Dict, stats: Dict) -> str:
     runs = data["runs"]
-    models = list(dict.fromkeys(r["model"] for r in runs))
+    models = list(dict.fromkeys(_engine(r) for r in runs))
     color = {m: charts.SERIES[i % len(charts.SERIES)] for i, m in enumerate(models)}
     by_id = stats["runs"]
-    run_of = {(r["model"], r["mode"]): r["id"] for r in runs}
+    run_of = {(_engine(r), r["mode"]): r["id"] for r in runs}
     max_kw = max([r["request"].get("max_keywords") or 10 for r in runs] + [1])
     out = []
 
@@ -302,7 +309,7 @@ def _charts(data: Dict, stats: Dict) -> str:
     panels = []
     for r in runs:
         values = by_id[r["id"]]["linked_per_dataset_values"]
-        panels.append({"label": f"{r['model']} · {r['mode']}", "color": color[r["model"]],
+        panels.append({"label": f"{_engine(r)} · {r['mode']}", "color": color[_engine(r)],
                        "counts": Counter(values), "marker": by_id[r["id"]]["linked_per_dataset"]["median"], "tip_unit": "datasets"})
     out.append(charts.histograms(panels, list(range(0, max_kw + 1)), "Linked keywords per dataset",
                                  "How many of each dataset's keywords got linked; line = median.", "linked keywords", "datasets"))
@@ -310,18 +317,18 @@ def _charts(data: Dict, stats: Dict) -> str:
     fuzzy_runs = [r for r in runs if r["mode"] == "fuzzy"]
     if fuzzy_runs:
         max_d = max([int(d) for r in fuzzy_runs for d in by_id[r["id"]]["linked_distance_counts"]] + [5])
-        panels = [{"label": f"{r['model']} · fuzzy", "color": color[r["model"]],
+        panels = [{"label": f"{_engine(r)} · fuzzy", "color": color[_engine(r)],
                    "counts": {int(d): n for d, n in by_id[r["id"]]["linked_distance_counts"].items()},
                    "tip_unit": "linked keywords"} for r in fuzzy_runs]
         out.append(charts.histograms(panels, list(range(0, max_d + 1)), "Match distance of linked keywords (fuzzy)",
-                                     "Hamming distance between keyword and linked label. Everything right of 0 is a non-exact link - check these in the table below.",
+                                     "Edit distance between keyword and linked label. Everything right of 0 is a non-exact link - check these in the table below.",
                                      "distance", "linked keywords"))
 
     series = []
     for r in runs:
         points = {int(rank): (b["linked"] / b["total"], b["linked"], b["total"])
                   for rank, b in by_id[r["id"]]["linked_by_rank"].items() if b["total"]}
-        series.append({"label": f"{r['model']} · {r['mode']}", "color": color[r["model"]], "dashed": r["mode"] == "exact", "points": points})
+        series.append({"label": f"{_engine(r)} · {r['mode']}", "color": color[_engine(r)], "dashed": r["mode"] == "exact", "points": points})
     out.append(charts.lines(series, list(range(1, max_kw + 1)), "Link rate by keyword rank",
                             "Are the most relevant keywords (rank 1) more often linkable than the tail?", "KeyBERT rank (1 = most relevant)"))
 
@@ -342,7 +349,7 @@ def _charts(data: Dict, stats: Dict) -> str:
     if len(all_sources) > 1:
         palette = {"gnd": ("GND", charts.SERIES[2], False), "tib": ("TIB", charts.SERIES[3], True)}
         categories = [palette.get(src, (src.upper(), charts.SERIES[2], False)) for src in all_sources]
-        rows = [(f"{r['model']} · {r['mode']}", {palette.get(k, (k.upper(),))[0]: v for k, v in by_id[r["id"]]["linked_by_source"].items()})
+        rows = [(f"{_engine(r)} · {r['mode']}", {palette.get(k, (k.upper(),))[0]: v for k, v in by_id[r["id"]]["linked_by_source"].items()})
                 for r in runs]
         out.append(charts.stacked_hbars(rows, categories, "Linked keywords by vocabulary",
                                         "Which terminology the winning match came from."))
@@ -361,7 +368,7 @@ def _domain_body(data: Dict, stats: Dict, h: str = "h2") -> str:
     runs = data["runs"]
     domain_cfg = runs[0]["request"] if runs else {}
     ds_stats = stats["datasets"]
-    header = "".join(f"<th>{_e(r['model'])}<br><span class='m'>{_e(r['mode'])}</span></th>" for r in runs)
+    header = "".join(f"<th>{_e(_engine(r))}<br><span class='m'>{_e(r['mode'])}</span></th>" for r in runs)
     rows = []
     for ds in data["datasets"]:
         chips = "".join(f'<span class="chip">{_e(k)}</span>' for k in ds["author_keywords"]) or '<span class="sub">no author keywords</span>'
@@ -393,7 +400,7 @@ Exact = max_distance 0, fuzzy = service default threshold.</div>
 {_stats_table(stats)}
 <{h}>Keywords per dataset</{h}>
 <p class="meta legend"><span style="background:var(--ok)">linked</span><span style="background:var(--near)">candidate too far / IRI dead</span>
-<span style="background:var(--none)">no candidate</span>★ agrees with an author keyword · d = Hamming distance ·
+<span style="background:var(--none)">no candidate</span>★ agrees with an author keyword · d = edit distance ·
 numbers are KeyBERT rank (1 = most relevant) · hover a keyword to highlight it across runs</p>
 <div class="scroll"><table><tr><th>Dataset</th>{header}</tr>{''.join(rows)}</table></div>"""
 
@@ -425,8 +432,8 @@ def _overview(items: List) -> str:
     rows = []
     for data, stats in items:
         meta = data["meta"]
-        models = list(dict.fromkeys(r["model"] for r in data["runs"]))
-        by = {(r["model"], r["mode"]): stats["runs"][r["id"]] for r in data["runs"]}
+        models = list(dict.fromkeys(_engine(r) for r in data["runs"]))
+        by = {(_engine(r), r["mode"]): stats["runs"][r["id"]] for r in data["runs"]}
         terminology = data["runs"][0]["request"].get("terminology") if data["runs"] else ""
         for i, m in enumerate(models):
             ex, fz = by.get((m, "exact")), by.get((m, "fuzzy"))

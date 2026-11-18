@@ -6,7 +6,7 @@ Standard library only — no extra dependencies.
 | Step | Script | Output |
 |------|--------|--------|
 | 1. Harvest OAI-PMH metadata once | `harvest.py [domain…]` | `data/harvest/<oai_set>/page_NNNN.xml` (git-ignored) |
-| 2. Run the keyword service | `run_extraction.py [domain…] [--limit N] [--random [--seed S]] [--require-abstract] [--models …]` | `results/<domain>_<timestamp>.json` |
+| 2. Run the keyword service | `run_extraction.py [domain…] [--limit N] [--random [--seed S]] [--require-abstract] [--models …] [--candidates …]` | `results/<domain>_<timestamp>.json` |
 | 3. Build reports + statistics | `report.py [result.json…] [--combined NAME]` | `reports/<name>.html`, `reports/<name>.stats.json`, with `--combined` also `reports/NAME.html` |
 
 Run them from this folder (`cd evaluation`). Domains, models, terminology and TIB collection
@@ -15,7 +15,7 @@ are configured in `config.py`:
 | Domain | OAI set | Terminology | TIB collection | Models |
 |--------|---------|-------------|----------------|--------|
 | culture | `radar4culture` | GND + TIB (`both`) | `NFDI4CULTURE` | `multilingual-e5`, `historic-multilingual-bert` |
-| chem | `radar4chem` | TIB | `NFDI4CHEM` | `scibert`, `chemicalbert` |
+| chem | `radar4chem` | GND + TIB (`both`) | `NFDI4CHEM` | `scibert`, `chemicalbert` |
 | memory | `radar4memory` | GND + TIB (`both`) | `NFDI4CULTURE` (TIB has no NFDI4Memory collection) | `multilingual-e5`, `historic-multilingual-bert` |
 
 By default the first `--limit` datasets are used; `--random` draws `--limit` datasets at random
@@ -23,8 +23,11 @@ instead. The seed is stored in the result (`meta.seed`); pass it again with `--s
 sample. `report.py --combined NAME` additionally writes one page with an overview table across all
 given domains, followed by each domain's full report.
 
-Each model runs in two modes: **exact** (`max_distance=0`) and **fuzzy** (the service's default
-threshold), with 10 keywords. The document sent is title + abstract.
+Each model runs with both candidate options of the service (`config.CANDIDATES`): `words` (single
+words, the default) and `pos-ngrams` (phrases of up to three words); `--candidates` limits this.
+Each such combination runs in two modes: **exact** (`max_distance=0`) and **fuzzy** (the service's
+default threshold), with 10 keywords. The document sent is title + abstract. The report treats
+model plus candidate option as one extractor (`multilingual-e5`, `multilingual-e5+pos-ngrams`).
 
 Environment overrides: `KEYWORD_SERVICE_URL` (default `https://ai.radar-service.eu/keywords`),
 `RADAR_OAI_URL`, `KEYWORD_EVAL_HARVEST_DIR`, `KEYWORD_EVAL_RESULTS_DIR`, `KEYWORD_EVAL_REPORTS_DIR`.
@@ -33,7 +36,8 @@ Environment overrides: `KEYWORD_SERVICE_URL` (default `https://ai.radar-service.
 
 ```text
 { schema_version, meta: {domain, oai_set, service_url, service_health, git_commit, started, finished, ...},
-  runs: [ {id: "<model>/<mode>", model, mode, request: {...exact payload sent...}} ],
+  runs: [ {id: "<model>/<mode>" or "<model>+pos-ngrams/<mode>", model, candidates, mode,
+           request: {...exact payload sent...}} ],
   datasets: [ {identifier, title, abstract, author_keywords, subject_areas, document,
                results: { "<run id>": {status, error, elapsed_s,
                                        keywords: [ {rank, keyword, match: null | {iri, label, best_term,
